@@ -91,6 +91,9 @@ class VASTClient:
         return headers
 
     def _send_get_request(self, endpoint, params=None, retries=2):
+        if self.token is None and self.refresh_token is not None:
+            self.renew_token(self.refresh_token)
+
         r = requests.get(os.path.join(self.url, endpoint),
                          params=params if not None else {},
                          headers=self._get_headers(),
@@ -106,6 +109,9 @@ class VASTClient:
         return r.json()
 
     def _send_post_request(self, endpoint, payload, headers=None, skip_auth=False):
+        if not skip_auth and self.token is None and self.refresh_token is not None:
+            self.renew_token(self.refresh_token)
+
         headers = {'Content-Type': 'application/json'}.update(headers if headers is not None else {})
 
         r = requests.post(os.path.join(self.url, endpoint),
