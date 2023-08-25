@@ -1,5 +1,7 @@
 import requests
 import os
+import json
+from pathlib import Path
 
 
 class VASTClient:
@@ -17,6 +19,8 @@ class VASTClient:
         self.url = url
         self.token = token
         self.refresh_token = refresh_token
+        if token is None and refresh_token is None:
+            self.load_token()
 
     def get_token(self, username, passwd):
         """
@@ -30,6 +34,7 @@ class VASTClient:
         r = self._send_post_request('token/', body, skip_auth=True)
         self.token = r['access']
         self.refresh_token = r['refresh']
+        self.store_token()
         return r
 
     def renew_token(self, refresh_token):
@@ -37,7 +42,19 @@ class VASTClient:
         r = self._send_post_request('token/refresh/', body, skip_auth=True)
         self.token = r['access']
         self.refresh_token = r['refresh']
+        self.store_token()
         return r
+
+    def store_token(self):
+        with open('vast_tokens.json', 'w') as f:
+            json.dump({'access': self.token, 'refresh': self.refresh_token})
+
+    def load_token(self):
+        if Path('vast_tokens.json').exists():
+            with open('vast_tokens.json') as f:
+                tokens = json.load(f)
+                self.token = tokens['access']
+                self.refresh_token = tokens['refresh']
 
     def get_quotas(self):
         return self._send_get_request('quotas/')
