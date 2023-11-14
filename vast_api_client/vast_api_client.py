@@ -1,6 +1,7 @@
 import requests
 import os
 import json
+import re
 from pathlib import Path
 
 
@@ -9,7 +10,7 @@ class VASTClient:
     used to get information from the VAST hpc storage unit
     """
 
-    def __init__(self, token=None, refresh_token=None, url='https://hpcvast-vms.mgmt.pax.tufts.edu/api'):
+    def __init__(self, url: str, token: str = None, refresh_token: str = None):
         """
         you can supply a token and refresh token directly if you have one already
         :param token:
@@ -59,11 +60,37 @@ class VASTClient:
     def get_quotas(self):
         return self._send_get_request('quotas/')
 
-    def get_views(self):
+    def get_views(self, path: str = None):
+        if path is not None:
+            return self._send_get_request('views/', params={'path': path})
         return self._send_get_request('views/')
 
     def get_status(self):
         return self._send_get_request('latest/dashboard/status/')
+
+    def create_view(self, path: str, policy_id: int, alias: str = None, protocols: set[str] = {'NFS'}):
+        if not VASTClient.is_valid_unix_path(path):
+            raise TypeError(f'the path provided [{path}] is not a valid unix path')
+        alias = '' if alias is None else alias  # set default
+        body = {
+            'path': path,
+            'alias': alias,
+            'policy_id': policy_id,
+            'protocols': protocols,
+            'create_dir': True
+        }
+        return self._send_post_request('views/', body)
+
+    def create_quota(self, name, path, soft_limit, hard_limit=None):
+        hard_limit = soft_limit if hard_limit is None else hard_limit  # set default
+        body = {
+            'name': name,
+            'path': path,
+            'hard_limit': hard_limit,
+            'soft_limit': soft_limit,
+            'create_dir': False
+        }
+        return self._send_post_request('quotas/', body)
 
     def is_base10(self):
         r = self.get_status()
@@ -71,27 +98,6 @@ class VASTClient:
 
     def get_total_capacity(self):
         """
-        'capacity_base_10': True,
-        'total_usage_capacity_percentage': 50.243462836192265, 'total_active_capacity': 3375.0,
-        'total_remaining_capacity': 1679.283129278511
-        'physical_space': 2481333861099766, 'physical_space_in_use': 1760415986330966,
-        'logical_space': 3831255246307328,
-        'logical_space_in_use': 2609877566328160, 'drr': 1.606232902433872, 'drr_text': '1.6:1',
-        'physical_space_tb': 2481.334, 'physical_space_in_use_tb': 1760.416, 'logical_space_tb': 3831.255,
-        'free_physical_space': 720917874768800, 'free_physical_space_tb': 720.918,
-        'free_logical_space': 1107539015342268, 'free_logical_space_tb': 1107.539,
-        'estore_capacity_in_use_bytes': 2723716230965060, 'estore_capacity_in_use_tb': 2723.716,
-        'logical_space_in_use_tb': 2609.878,
-        'physical_space_in_use_percent': 70.95,
-        'logical_space_in_use_percent': 68.12, 'logical_drr_percent': 60.62,
-        'physical_space_wo_overhead': 2697102022934528,
-        'physical_space_in_use_wo_overhead': 1695716870721489,
-        'free_physical_space_wo_overhead': 1001385152213039, 'free_physical_space_wo_overhead_tb': 1001.385,
-        'usable_auxiliary_space_in_use': 70873074797810.47, 'usable_capacity_bytes': 2385245584431655,
-        'free_usable_capacity': 689528713710166, 'free_usable_capacity_tb': 689.529, 'usable_capacity_tb': 2385.246,
-        'auxiliary_space_in_use': 73577196776612.06, 'auxiliary_space_in_use_tb': 73.577,
-        'logical_auxiliary_space_in_use': 113838664636900, 'logical_auxiliary_space_in_use_tb': 113.839
-
         :return:
         """
         r = self.get_status()
@@ -138,5 +144,13 @@ class VASTClient:
         r.raise_for_status()
         return r.json()
 
+    @staticmethod
+    def is_valid_unix_path(path):
+        # Regular expression pattern for Unix paths
+        pattern = r'^/([A-Za-z0-9_-]+/)*[A-Za-z0-9_-]+$'
 
-
+        # Use re.match to check if the path matches the pattern
+        if re.match(pattern, path):
+            return True
+        else:
+            return False
