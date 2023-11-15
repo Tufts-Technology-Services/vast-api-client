@@ -1,8 +1,6 @@
 import requests
 import os
-import json
 import re
-from pathlib import Path
 
 
 class VASTClient:
@@ -20,42 +18,23 @@ class VASTClient:
         self.url = url
         self.token = token
         self.refresh_token = refresh_token
-        if token is None and refresh_token is None:
-            self.load_token()
 
-    def get_token(self, username, passwd):
+    def get_token(self, username, passwd) -> None:
         """
         use to get a token and refresh token. token has key 'access', refresh token has key 'refresh'
-        'access_token_lifetime': '01:00:00', 'refresh_token_lifetime': '1 00:00:00'
         :param username:
         :param passwd:
-        :return:
         """
         body = {'username': username, 'password': passwd}
         r = self._send_post_request('token/', body, skip_auth=True)
         self.token = r['access']
         self.refresh_token = r['refresh']
-        self.store_token()
-        return r
 
-    def renew_token(self, refresh_token):
+    def renew_token(self, refresh_token) -> None:
         body = {'refresh': refresh_token}
         r = self._send_post_request('token/refresh/', body, skip_auth=True)
         self.token = r['access']
         self.refresh_token = r['refresh']
-        self.store_token()
-        return r
-
-    def store_token(self):
-        with open('vast_tokens.json', 'w') as f:
-            json.dump({'access': self.token, 'refresh': self.refresh_token}, f)
-
-    def load_token(self):
-        if Path('vast_tokens.json').exists():
-            with open('vast_tokens.json') as f:
-                tokens = json.load(f)
-                self.token = tokens['access']
-                self.refresh_token = tokens['refresh']
 
     def get_quotas(self):
         return self._send_get_request('quotas/')
