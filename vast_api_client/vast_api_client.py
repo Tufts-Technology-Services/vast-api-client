@@ -47,13 +47,13 @@ class VASTClient:
     def get_status(self):
         return self._send_get_request('latest/dashboard/status/')
 
-    def create_view(self, path: str, policy_id: int, alias: str = None, protocols: set[str] = {'NFS'}):
+    def create_view(self, path: str, share: str, policy_id: int = 5, protocols: set[str] = {'SMB'}):
         if not VASTClient.is_valid_unix_path(path):
             raise TypeError(f'the path provided [{path}] is not a valid unix path')
-        alias = '' if alias is None else alias  # set default
+        share = f'{share}$' if not share.endswith('$') else share  # set default
         body = {
             'path': path,
-            'alias': alias,
+            'share': share,
             'policy_id': policy_id,
             'protocols': protocols,
             'create_dir': True
