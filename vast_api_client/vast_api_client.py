@@ -55,7 +55,7 @@ class VASTClient:
             'path': path,
             'share': share,
             'policy_id': policy_id,
-            'protocols': protocols,
+            'protocols': list(protocols),
             'create_dir': True
         }
         return self._send_post_request('views/', body)
