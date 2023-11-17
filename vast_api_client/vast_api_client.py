@@ -50,8 +50,8 @@ class VASTClient:
         return self._send_get_request('latest/dashboard/status/')
 
     def create_view(self, path: Path, share: str,
-                    policy_id: PolicyEnum = ProtocolEnum.SMB,
-                    protocols: set[PolicyEnum] = {ProtocolEnum.SMB}):
+                    policy_id: PolicyEnum,
+                    protocols: set[ProtocolEnum]):
         # validation
         vc = ViewCreate(path=path, share=share, policy_id=policy_id, protocols=protocols)
         if not VASTClient.is_valid_unix_path(vc.path.as_posix()):
