@@ -1,6 +1,8 @@
 import requests
 import os
 import re
+from .models import *
+from pathlib import Path
 
 
 class VASTClient:
@@ -39,34 +41,45 @@ class VASTClient:
     def get_quotas(self):
         return self._send_get_request('quotas/')
 
-    def get_views(self, path: str = None):
+    def get_views(self, path: Path = None):
         if path is not None:
-            return self._send_get_request('views/', params={'path': path})
+            return self._send_get_request('views/', params={'path': path.as_posix()})
         return self._send_get_request('views/')
 
     def get_status(self):
         return self._send_get_request('latest/dashboard/status/')
 
-    def create_view(self, path: str, share: str, policy_id: int = 5, protocols: set[str] = {'SMB'}):
-        if not VASTClient.is_valid_unix_path(path):
+    def create_view(self, path: Path, share: str,
+                    policy_id: PolicyEnum = ProtocolEnum.SMB,
+                    protocols: set[PolicyEnum] = {ProtocolEnum.SMB}):
+        # validation
+        vc = ViewCreate(path=path, share=share, policy_id=policy_id, protocols=protocols)
+        if not VASTClient.is_valid_unix_path(vc.path.as_posix()):
             raise TypeError(f'the path provided [{path}] is not a valid unix path')
-        share = f'{share}$' if not share.endswith('$') else share  # set default
+        assert share.endswith('$')
         body = {
-            'path': path,
+            'path': path.as_posix(),
             'share': share,
-            'policy_id': policy_id,
-            'protocols': list(protocols),
+            'policy_id': policy_id.value,
+            'protocols': [i.value for i in protocols],
             'create_dir': True
         }
         return self._send_post_request('views/', body)
 
-    def create_quota(self, name, path, soft_limit, hard_limit=None):
+    def create_quota(self, name: str, path: Path, soft_limit: int, hard_limit: int = None):
+        # validation
         hard_limit = soft_limit if hard_limit is None else hard_limit  # set default
+        assert hard_limit >= soft_limit
+
+        qc = QuotaCreate(name=name, path=path, soft_limit=soft_limit, hard_limit=hard_limit)
+        if not VASTClient.is_valid_unix_path(qc.path.as_posix()):
+            raise TypeError(f'the path provided [{path}] is not a valid unix path')
+
         body = {
-            'name': name,
-            'path': path,
-            'hard_limit': hard_limit,
-            'soft_limit': soft_limit,
+            'name': qc.name,
+            'path': qc.path.as_posix(),
+            'hard_limit': qc.hard_limit,
+            'soft_limit': qc.soft_limit,
             'create_dir': False
         }
         return self._send_post_request('quotas/', body)

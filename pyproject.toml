@@ -9,6 +9,7 @@ packages = [{include = "vast_api_client"}]
 [tool.poetry.dependencies]
 python = ">=3.9,<4.0"
 requests = "^2.30.0"
+pydantic = "^2.5.1"
 
 
 [build-system]
