@@ -49,41 +49,11 @@ class VASTClient:
     def get_status(self):
         return self._send_get_request('latest/dashboard/status/')
 
-    def create_view(self, path: Path, share: str,
-                    policy_id: PolicyEnum,
-                    protocols: set[ProtocolEnum]):
-        # validation
-        vc = ViewCreate(path=path, share=share, policy_id=policy_id, protocols=protocols)
-        if not VASTClient.is_valid_unix_path(vc.path.as_posix()):
-            raise TypeError(f'the path provided [{path}] is not a valid unix path')
-        if not share.endswith("$"):
-            raise ValueError("share_name must end with '$'")
-        body = {
-            'path': path.as_posix(),
-            'share': share,
-            'policy_id': policy_id.value,
-            'protocols': [i.value for i in protocols],
-            'create_dir': True
-        }
-        return self._send_post_request('views/', body)
+    def create_view(self, view_model: ViewCreate):
+        return self._send_post_request('views/', view_model.model_dump())
 
-    def create_quota(self, name: str, path: Path, quota_size: int, soft_limit: int = None):
-        # validation
-        soft_limit = quota_size if soft_limit is None else soft_limit  # set default
-        if quota_size < soft_limit:
-            raise ValueError("'soft_limit' cannont be larger than 'quota_size'")
-        qc = QuotaCreate(name=name, path=path, soft_limit=soft_limit, hard_limit=quota_size)
-        if not VASTClient.is_valid_unix_path(qc.path.as_posix()):
-            raise TypeError(f'the path provided [{path}] is not a valid unix path')
-
-        body = {
-            'name': qc.name,
-            'path': qc.path.as_posix(),
-            'hard_limit': qc.hard_limit,
-            'soft_limit': qc.soft_limit,
-            'create_dir': False
-        }
-        return self._send_post_request('quotas/', body)
+    def create_quota(self, quota_model: QuotaCreate):
+        return self._send_post_request('quotas/', quota_model.model_dump())
 
     def is_base10(self):
         r = self.get_status()
@@ -137,13 +107,4 @@ class VASTClient:
         r.raise_for_status()
         return r.json()
 
-    @staticmethod
-    def is_valid_unix_path(path):
-        # Regular expression pattern for Unix paths
-        pattern = r'^/([A-Za-z0-9_-]+/)*[A-Za-z0-9_-]+$'
 
-        # Use re.match to check if the path matches the pattern
-        if re.match(pattern, path):
-            return True
-        else:
-            return False
