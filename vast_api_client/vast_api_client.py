@@ -56,7 +56,8 @@ class VASTClient:
         vc = ViewCreate(path=path, share=share, policy_id=policy_id, protocols=protocols)
         if not VASTClient.is_valid_unix_path(vc.path.as_posix()):
             raise TypeError(f'the path provided [{path}] is not a valid unix path')
-        assert share.endswith('$')
+        if not share.endswith("$"):
+            raise ValueError("share_name must end with '$'")
         body = {
             'path': path.as_posix(),
             'share': share,
@@ -69,8 +70,8 @@ class VASTClient:
     def create_quota(self, name: str, path: Path, quota_size: int, soft_limit: int = None):
         # validation
         soft_limit = quota_size if soft_limit is None else soft_limit  # set default
-        assert quota_size >= soft_limit
-
+        if quota_size < soft_limit:
+            raise ValueError("'soft_limit' cannont be larger than 'quota_size'")
         qc = QuotaCreate(name=name, path=path, soft_limit=soft_limit, hard_limit=quota_size)
         if not VASTClient.is_valid_unix_path(qc.path.as_posix()):
             raise TypeError(f'the path provided [{path}] is not a valid unix path')
