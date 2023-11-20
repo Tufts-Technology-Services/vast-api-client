@@ -66,12 +66,12 @@ class VASTClient:
         }
         return self._send_post_request('views/', body)
 
-    def create_quota(self, name: str, path: Path, soft_limit: int, hard_limit: int = None):
+    def create_quota(self, name: str, path: Path, quota_size: int, soft_limit: int = None):
         # validation
-        hard_limit = soft_limit if hard_limit is None else hard_limit  # set default
-        assert hard_limit >= soft_limit
+        soft_limit = quota_size if soft_limit is None else soft_limit  # set default
+        assert quota_size >= soft_limit
 
-        qc = QuotaCreate(name=name, path=path, soft_limit=soft_limit, hard_limit=hard_limit)
+        qc = QuotaCreate(name=name, path=path, soft_limit=soft_limit, hard_limit=quota_size)
         if not VASTClient.is_valid_unix_path(qc.path.as_posix()):
             raise TypeError(f'the path provided [{path}] is not a valid unix path')
 
