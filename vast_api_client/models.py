@@ -2,7 +2,7 @@ from pathlib import Path
 
 from pydantic import (BaseModel, PositiveInt, InstanceOf, model_validator,
                       field_validator, field_serializer, ConfigDict)
-from typing import Set
+from typing import Set, Union, Optional
 from enum import Enum, IntEnum
 import re
 
@@ -31,7 +31,7 @@ class QuotaCreate(BaseModel):
     model_config = ConfigDict(extra='forbid', str_strip_whitespace=True)
     name: str
     path: Path
-    soft_limit: PositiveInt = None
+    soft_limit: Optional[PositiveInt] = None
     hard_limit: PositiveInt
     create_dir: bool = False
 
