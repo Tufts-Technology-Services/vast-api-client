@@ -2,7 +2,7 @@ from pathlib import Path
 
 from pydantic import (BaseModel, PositiveInt, InstanceOf, model_validator,
                       field_validator, field_serializer, ConfigDict)
-from typing import Set, Union, Optional
+from typing import Set, Optional
 from enum import Enum, IntEnum
 import re
 
@@ -25,6 +25,7 @@ class ProtocolEnum(str, Enum):
 
 class PolicyEnum(IntEnum):
     SMBDefault = 5
+    SMBMigration = 6
 
 
 class QuotaCreate(BaseModel):
