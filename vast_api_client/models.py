@@ -58,7 +58,7 @@ class ViewCreate(BaseModel):
     model_config = ConfigDict(extra='forbid', str_strip_whitespace=True, frozen=True)
     share: str
     path: Path
-    policy_id: InstanceOf[PolicyEnum] = PolicyEnum.SMBDefault
+    policy_id: InstanceOf[PolicyEnum] = PolicyEnum.SMBMigration
     protocols: Set[InstanceOf[ProtocolEnum]] = {ProtocolEnum.SMB}
     create_dir: bool = True
 

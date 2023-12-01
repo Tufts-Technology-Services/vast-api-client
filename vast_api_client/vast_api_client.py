@@ -1,6 +1,5 @@
 import requests
 import os
-import re
 from .models import *
 from pathlib import Path
 
@@ -55,6 +54,12 @@ class VASTClient:
     def create_quota(self, quota_model: QuotaCreate):
         return self._send_post_request('quotas/', quota_model.model_dump())
 
+    def delete_quota(self, quota_id: int):
+        if isinstance(quota_id, int):
+            return self._send_delete_request(f'quotas/{str(quota_id)}/')
+        else:
+            raise TypeError('quota_id must be of type int')
+
     def is_base10(self):
         r = self.get_status()
         return r['vms'][0]['capacity_base_10']
@@ -107,4 +112,13 @@ class VASTClient:
         r.raise_for_status()
         return r.json()
 
+    def _send_delete_request(self, endpoint):
+        if self.token is None and self.refresh_token is not None:
+            self.renew_token(self.refresh_token)
 
+        r = requests.delete(os.path.join(self.url, endpoint),
+                            headers=self._get_headers(),
+                            verify=False)
+
+        r.raise_for_status()
+        return {'status': r.status_code}
