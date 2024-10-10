@@ -4,9 +4,9 @@ version = "0.2.0"
 description = "code to abstract working with vast data platform api"
 authors = [{name="Chris Barnett", email="Christopher.Barnett@tufts.edu"}]
 dependencies = [
-    "requests>=2.26.0",
-    "pydantic>=2.5.1",
-    "pytest"
+    "requests>=2.32.0",
+    "pydantic>=2.9.1",
+    "pytest>=8.3.1"
 ]
 requires-python = ">= 3.11"
 
