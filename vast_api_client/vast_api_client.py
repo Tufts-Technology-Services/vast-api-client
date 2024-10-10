@@ -1,6 +1,6 @@
 import requests
 import os
-from .models import *
+from vast_api_client.models import ViewCreate, QuotaCreate
 from pathlib import Path
 
 
@@ -103,7 +103,8 @@ class VASTClient:
         if not skip_auth and self.token is None and self.refresh_token is not None:
             self.renew_token(self.refresh_token)
 
-        headers = {'Content-Type': 'application/json'}.update(headers if headers is not None else {})
+        headers = headers if headers is not None else {}
+        headers.update({'Content-Type': 'application/json'})
 
         r = requests.post(os.path.join(self.url, endpoint),
                           json=payload,

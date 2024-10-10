@@ -1,12 +1,12 @@
 [project]
 name = "vast-api-client"
-version = "0.1.0"
-description = "python code for interacting with the VAST storage API"
+version = "0.2.0"
+description = "code to abstract working with vast data platform api"
 authors = [{name="Chris Barnett", email="Christopher.Barnett@tufts.edu"}]
-readme = "README.md"
 dependencies = [
-    "requests=^2.32.3",
-    "pydantic=^2.8.2"
+    "requests>=2.26.0",
+    "pydantic>=2.5.1",
+    "pytest"
 ]
 requires-python = ">= 3.11"
 
