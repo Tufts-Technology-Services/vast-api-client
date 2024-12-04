@@ -1,10 +1,9 @@
 from pathlib import Path
-
-from pydantic import (BaseModel, PositiveInt, InstanceOf, model_validator,
-                      field_validator, field_serializer, ConfigDict)
 from typing import Set, Optional
 from enum import Enum, IntEnum
 import re
+from pydantic import (BaseModel, ConfigDict, PositiveInt, field_validator,
+                      model_validator, field_serializer, InstanceOf)
 
 
 def validate_path(path: Path):
@@ -26,6 +25,11 @@ class ProtocolEnum(str, Enum):
 class PolicyEnum(IntEnum):
     SMBDefault = 5
     SMBMigration = 6
+
+
+class CloneTypeEnum(str, Enum):
+    LOCAL = 'LOCAL'
+    REMOTE = 'REMOTE'
 
 
 class QuotaCreate(BaseModel):
@@ -56,10 +60,11 @@ class QuotaCreate(BaseModel):
 
 class ViewCreate(BaseModel):
     model_config = ConfigDict(extra='forbid', str_strip_whitespace=True, frozen=True)
-    share: str
+    name: str
+    share: str = None # share name must end with '$'
     path: Path
-    policy_id: InstanceOf[PolicyEnum] = PolicyEnum.SMBMigration
-    protocols: Set[InstanceOf[ProtocolEnum]] = {ProtocolEnum.SMB}
+    policy_id: InstanceOf[PolicyEnum] = None
+    protocols: Set[InstanceOf[ProtocolEnum]] = {}
     create_dir: bool = True
 
     @field_serializer('path')
@@ -73,11 +78,26 @@ class ViewCreate(BaseModel):
     @field_serializer('protocols')
     def serialize_protocols(self, protocols: Set[ProtocolEnum], _info):
         return [i.value for i in protocols]
+    
+    @field_validator("policy_id")
+    @classmethod
+    def is_valid_policy_id(cls, policy_id: PolicyEnum) -> PolicyEnum:
+        if policy_id is None:
+            raise ValueError("policy_id must be set")
+        return policy_id
+    
+    @field_validator("protocols")
+    @classmethod
+    def is_valid_protocols(cls, protocols: Set[ProtocolEnum]) -> Set[ProtocolEnum]:
+        if len(protocols) == 0:
+            raise ValueError("protocols must not be empty")
+        else:
+            return protocols
 
     @field_validator("share")
     @classmethod
     def is_valid_share_name(cls, share: str):
-        if not share.endswith("$"):
+        if share is not None and not share.endswith("$"):
             raise ValueError("share_name must end with '$'")
         else:
             return share
@@ -86,3 +106,122 @@ class ViewCreate(BaseModel):
     @classmethod
     def is_valid_unix_path(cls, path: Path) -> Path:
         return validate_path(path)
+
+"""
+POST protectedpaths
+{
+  "name": "string",
+  "source_dir": "string",
+  "enabled": true,
+  "protection_policy_id": "string",
+  "tenant_id": "string",
+}
+
+{'url': 'https://hpcvast-vms.mgmt.pax.tufts.edu/api/bigcatalogconfig/2/', 
+'target_name': 'N/A', 'target_object_id': None, 
+'pretty_schedules': ['every 1D start-at 2021-11-03 03:00:00 UTC keep-local 3M'], 
+'target_guid': None, 
+'prefix': 'projects', 'name': 'projects', 'created': '2021-07-08T18:45:04.824227Z', 
+'clone_type': 'LOCAL', 'handle': None, 
+'frames': [{'every': '1D', 'start-at': '2021-11-03 03:00:00', 'keep-local': '3M', 'keep-remote': '0s'}], 
+'guid': 'f44f7b6b-4e7b-4a9f-aca1-d7e71c9709dd', 
+'is_local': False, 'state': 'working', 'internal': False, 
+'indestructible': False, 'is_on_schedule': True, 'schedule_miss': 25, 
+'native_replication_remote_target': None, 'replication_target': None, 'id': 2, 'title': 'projects'}
+
+POST protectionpolicies
+{
+  "name": "string",
+  "frames": [{'every': '1D', 'start-at': '2024-01-22 17:00:00', 'keep-local': '2M', 'keep-remote': '0s'}],
+  "prefix": "string",
+  "clone_type": "LOCAL",
+  "indestructible": False
+}
+"""
+class ProtectionPolicyFrame(BaseModel):
+    model_config = ConfigDict(extra='forbid', str_strip_whitespace=True, frozen=True)
+    every: str
+    start_at: str
+    keep_local: str
+    keep_remote: str = '0s'
+
+    """
+    {'every': '1D', 'start-at': '2024-01-22 17:00:00', 'keep-local': '2M', 'keep-remote': '0s'}
+    """
+    @field_validator("every")
+    @classmethod
+    def is_valid_every(cls, every: str) -> str:
+        if every not in ['1D', '1W', '1M', '1Y']:
+            raise ValueError("Invalid value for 'every'")
+        return every
+    
+    @field_validator("start_at")
+    @classmethod
+    def is_valid_start_at(cls, start_at: str) -> str:
+        return start_at
+    
+    @field_validator("keep_local")
+    @classmethod
+    def is_valid_keep_local(cls, keep_local: str) -> str:
+        return keep_local
+    
+    @field_validator("keep_remote")
+    @classmethod
+    def is_valid_keep_remote(cls, keep_remote: str) -> str:
+        return keep_remote
+    
+
+class ProtectionPolicyCreate(BaseModel):
+    model_config = ConfigDict(extra='forbid', str_strip_whitespace=True, frozen=True)
+    name: str
+    frames: list[ProtectionPolicyFrame]
+    prefix: str
+    clone_type: CloneTypeEnum = CloneTypeEnum.LOCAL
+    indestructible: bool = False
+
+    @field_serializer('frames')
+    def serialize_frames(self, frames: list[ProtectionPolicyFrame], _info):
+        return [frame.dict() for frame in frames]
+    
+    @field_serializer('clone_type')
+    def serialize_clone_type(self, clone_type: CloneTypeEnum, _info):
+        return clone_type.value
+                
+    @field_validator("name")
+    @classmethod
+    def is_valid_name(cls, name: str) -> str:
+        return name
+    
+    @field_validator("frames")
+    @classmethod
+    def is_valid_frames(cls, frames: list[ProtectionPolicyFrame]) -> list[ProtectionPolicyFrame]:
+        return frames
+    
+    @field_validator("prefix")
+    @classmethod
+    def is_valid_prefix(cls, prefix: str) -> str:
+        return prefix
+    
+    @field_validator("clone_type")
+    @classmethod
+    def is_valid_clone_type(cls, clone_type: str) -> str:
+        if clone_type not in ['LOCAL', 'REMOTE']:
+            raise ValueError("Invalid value for 'clone_type'")
+        return clone_type
+
+
+class ProtectedPathCreate(BaseModel):
+    model_config = ConfigDict(extra='forbid', str_strip_whitespace=True, frozen=True)
+    name: str
+    source_dir: Path
+    enabled: bool = True
+    protection_policy_id: int
+    tenant_id: int
+
+    @field_serializer('source_dir')
+    def serialize_source_dir(self, source_dir: Path, _info):
+        return source_dir.as_posix()
+    
+
+
+
