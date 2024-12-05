@@ -2,7 +2,7 @@ from pathlib import Path
 from typing import Set, Optional
 from enum import Enum, IntEnum
 import re
-from pydantic import (BaseModel, ConfigDict, PositiveInt, field_validator,
+from pydantic import (BaseModel, ConfigDict, Field, PositiveInt, field_validator,
                       model_validator, field_serializer, InstanceOf)
 
 
@@ -223,5 +223,39 @@ class ProtectedPathCreate(BaseModel):
         return source_dir.as_posix()
     
 
+class PathBody(BaseModel):
+    model_config = ConfigDict(extra='allow', str_strip_whitespace=True)
+    path: Path
 
+    @field_validator("path")
+    @classmethod
+    def is_valid_unix_path(cls, path: Path) -> Path:
+        return validate_path(path)
+
+
+class FolderCreateOrUpdate(BaseModel):
+    model_config = ConfigDict(extra='forbid', str_strip_whitespace=True, frozen=True)
+    path: Path
+    owner_is_group: bool = False
+    user: str = None
+    group: str = None
+
+    @field_validator("path")
+    @classmethod
+    def is_valid_unix_path(cls, path: Path) -> Path:
+        return validate_path(path)
+    
+
+class QuotaUpdate(BaseModel):
+    model_config = ConfigDict(extra='forbid', str_strip_whitespace=True)
+    soft_limit: Optional[PositiveInt] = None
+    hard_limit: PositiveInt
+
+    @model_validator(mode="after")
+    def soft_limit_below_hard_limit(self) -> 'QuotaUpdate':
+        if self.soft_limit is None:
+            self.soft_limit = self.hard_limit
+        if self.hard_limit < self.soft_limit:
+            raise ValueError("'soft_limit' cannot be larger than 'hard_limit'")
+        return self
 
