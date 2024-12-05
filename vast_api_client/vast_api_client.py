@@ -79,8 +79,9 @@ class VASTClient(AbstractClient):
             return self._send_get_request('views/', params=body)
         return self._send_get_request('views/')
 
-    def add_view(self, name: str, path: Path,
-                protocols: set[ProtocolEnum] = {},
+    def add_view(self, path: Path,
+                protocols: set[ProtocolEnum] = set(),
+                share_name: str = None,
                 policy_id: PolicyEnum = None,
                 dry_run=False):
         """
@@ -92,11 +93,7 @@ class VASTClient(AbstractClient):
         :param dry_run: if True, will not actually create the view
         :return: message indicating success or failure
         """
-        view_matches = self.get_views(path=path)
-        if len(view_matches) > 0:
-            raise ResourceExistsError(f'This path already exists as a view on {self.host}!')
-
-        vc = ViewCreate(share=name, path=path, protocols=protocols, policy_id=policy_id)
+        vc = ViewCreate(share=share_name, path=path, protocols=protocols, policy_id=policy_id)
         print(f"creating view {vc}")
         if not dry_run:
             return self._send_post_request('views/', vc.model_dump())
@@ -116,10 +113,6 @@ class VASTClient(AbstractClient):
         :param dry_run: if True, will not actually create the quota
         :return: message indicating success or failure
         """
-        matches = self.get_quotas(path=path)
-        if len(matches) > 0:
-            raise ResourceExistsError(f'A quota for this path already exists on {self.host}!')
-        
         name = name[:-1] if name.endswith('$') else name
         qc = QuotaCreate(name=name, path=path, soft_limit=soft_limit, hard_limit=hard_limit)
         print(f"creating quota {qc}")
