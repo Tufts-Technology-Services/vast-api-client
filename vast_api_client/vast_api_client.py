@@ -1,22 +1,8 @@
 from pathlib import Path
-from vast_api_client.models import *
+from vast_api_client.models import (PathBody, ViewCreate, QuotaCreate, FolderCreateOrUpdate, 
+                                    QuotaUpdate, ProtectedPathCreate, ProtocolEnum, PolicyEnum)
+from vast_api_client.utils import ResourceExistsError
 from vast_api_client.abstract_client import AbstractClient
-
-
-class ResourceExistsError(ValueError):
-    pass
-
-
-def gib_to_bytes(gb: int):
-    return 1073741824 * gb
-
-
-def gb_to_bytes(gb: int):
-    return 1000000000 * gb
-
-
-def bytes_to_gib(in_bytes: int):
-    return in_bytes / 1073741824
 
 
 class VASTClient(AbstractClient):
