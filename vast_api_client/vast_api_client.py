@@ -146,7 +146,7 @@ class VASTClient(AbstractClient):
             body['tenant_id'] = tenant_id
         return self._send_delete_request('folders/delete_folder/', body)
 
-    def get_owner_and_group(self, path: Path, tenant_id: int = None):
+    def get_folder(self, path: Path, tenant_id: int = None):
         """
         response:
         {
