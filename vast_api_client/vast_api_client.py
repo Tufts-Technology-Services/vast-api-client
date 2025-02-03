@@ -1,4 +1,5 @@
 from pathlib import Path
+from urllib.parse import urljoin
 from vast_api_client.models import (PathBody, ViewCreate, QuotaCreate, FolderCreateOrUpdate, 
                                     QuotaUpdate, ProtectedPathCreate, ProtocolEnum, PolicyEnum)
 from vast_api_client.utils import ResourceExistsError
@@ -20,7 +21,7 @@ class VASTClient(AbstractClient):
         :param refresh_token:
         """
         self.host = host
-        self.url = Path(f'https://{host}', 'api/latest')
+        self.url = urljoin(f'https://{host}', 'api/latest')
        
         if token is not None and refresh_token is not None:
             self.token = token

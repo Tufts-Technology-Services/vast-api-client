@@ -1,4 +1,5 @@
 from pathlib import Path
+from urllib.parse import urljoin
 import requests
 
 
@@ -24,11 +25,11 @@ class AbstractClient:
         if self.token is None and self.refresh_token is not None:
             self.renew_token(self.refresh_token)
 
-        r = requests.get(Path(self.url, endpoint).as_posix(),
+        r = requests.get(urljoin(self.url, endpoint),
                          params=params if not None else {},
                          headers=self._get_headers(),
-                         verify=False,
-                         timeout=10)
+                         verify=True,
+                         timeout=30)
         try:
             r.raise_for_status()
         except requests.exceptions.HTTPError as e:
@@ -56,10 +57,10 @@ class AbstractClient:
         headers = headers if headers is not None else {}
         headers.update({'Content-Type': 'application/json'})
 
-        r = requests.request(http_method, Path(self.url, endpoint).as_posix(),
+        r = requests.request(http_method, urljoin(self.url, endpoint),
                           json=payload,
                           headers=self._get_headers(headers, skip_auth=skip_auth),
-                          verify=False,
+                          verify=True,
                           timeout=20)
         r.raise_for_status()
         return r.json()
@@ -70,9 +71,9 @@ class AbstractClient:
         if self.token is None and self.refresh_token is not None:
             self.renew_token(self.refresh_token)
 
-        r = requests.delete(Path(self.url, endpoint).as_posix(),
+        r = requests.delete(urljoin(self.url, endpoint),
                             headers=self._get_headers(),
-                            verify=False,
+                            verify=True,
                             timeout=10)
 
         r.raise_for_status()
