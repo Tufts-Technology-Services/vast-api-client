@@ -196,10 +196,19 @@ class ProtectedPathCreate(BaseModel):
     def serialize_source_dir(self, source_dir: Path, _info):
         return source_dir.as_posix()
     
+    @field_validator("source_dir")
+    @classmethod
+    def is_valid_unix_path(cls, path: Path) -> Path:
+        return validate_path(path)
+    
 
 class PathBody(BaseModel):
     model_config = ConfigDict(extra='allow', str_strip_whitespace=True)
     path: Path
+
+    @field_serializer('path')
+    def serialize_path(self, path: Path, _info):
+        return path.as_posix()
 
     @field_validator("path")
     @classmethod
@@ -214,6 +223,10 @@ class FolderCreateOrUpdate(BaseModel):
     user: str = None
     group: str = None
 
+    @field_serializer('path')
+    def serialize_path(self, path: Path, _info):
+        return path.as_posix()
+    
     @field_validator("path")
     @classmethod
     def is_valid_unix_path(cls, path: Path) -> Path:
