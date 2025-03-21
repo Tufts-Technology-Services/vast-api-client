@@ -21,7 +21,7 @@ class VASTClient(AbstractClient):
         :param refresh_token:
         """
         self.host = host
-        self.url = urljoin(f'https://{host}', 'api/latest')
+        self.url = urljoin(f'https://{host}', 'api/v5/')
        
         if token is not None and refresh_token is not None:
             self.token = token
