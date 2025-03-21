@@ -1,6 +1,6 @@
 from pathlib import Path
 from urllib.parse import urljoin
-from vast_api_client.models import (PathBody, ViewCreate, QuotaCreate, FolderCreateOrUpdate, 
+from vast_api_client.models import (PathBody, ViewCreate, QuotaCreate, FolderCreateOrUpdate,
                                     QuotaUpdate, ProtectedPathCreate, ProtocolEnum, PolicyEnum)
 from vast_api_client.utils import ResourceExistsError
 from vast_api_client.abstract_client import AbstractClient
@@ -67,7 +67,7 @@ class VASTClient(AbstractClient):
         return self._send_get_request('views/')
 
     def add_view(self, path: Path,
-                protocols: set[ProtocolEnum] = set(),
+                protocols: set[ProtocolEnum] = None,
                 share_name: str = None,
                 policy_id: PolicyEnum = None,
                 dry_run=False):
@@ -84,9 +84,10 @@ class VASTClient(AbstractClient):
         print(f"creating view {vc}")
         if not dry_run:
             return self._send_post_request('views/', vc.model_dump())
-        else:
-            print('skipping creation for dry run!')
-            print(vc.model_dump())
+        
+        print('skipping creation for dry run!')
+        print(vc.model_dump())
+        return None
 
     def add_quota(self, name: str, path: Path,
                 hard_limit: int, soft_limit: int = None,
@@ -109,25 +110,25 @@ class VASTClient(AbstractClient):
         else:
             return self._send_post_request('quotas/', qc.model_dump())
     
-    def add_folder(self, path: Path, group: str, user: str = None, owner_is_group: bool = False):
+    def add_folder(self, path: Path, group: str, user: str = None):
         """
         Add a folder to the storage system
         :param path: path of the folder
         :param group: group that owns the folder
         :param user: user that owns the folder
-        :param owner_is_group: if True, the owner is a group
         """
+        owner_is_group = (group == user)
         folder = FolderCreateOrUpdate(path=path, owner_is_group=owner_is_group, user=user, group=group)
         return self._send_post_request('folders/create_folder/', folder.model_dump())
 
-    def modify_folder(self, path: Path, group: str, user: str = None, owner_is_group: bool = None):
+    def modify_folder(self, path: Path, group: str, user: str = None):
         """
         update folder
         :param path: path of the folder
         :param group: group that owns the folder
         :param user: user that owns the folder
-        :param owner_is_group: if True, the owner is a group
         """
+        owner_is_group = (group == user)
         if user is None and owner_is_group is None:
             folder = FolderCreateOrUpdate(path=path, group=group)
         elif user is None:
