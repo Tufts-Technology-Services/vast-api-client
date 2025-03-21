@@ -1,7 +1,8 @@
-from pathlib import Path
 from urllib.parse import urljoin
+import os
 import requests
 
+VERIFY_CERTS = os.getenv('VERIFY_CERTS', 'True').lower() in ['true', '1', 'yes']
 
 class AbstractClient:
     url = None
@@ -28,7 +29,7 @@ class AbstractClient:
         r = requests.get(urljoin(self.url, endpoint),
                          params=params if not None else {},
                          headers=self._get_headers(),
-                         verify=True,
+                         verify=VERIFY_CERTS,
                          timeout=30)
         try:
             r.raise_for_status()
@@ -60,7 +61,7 @@ class AbstractClient:
         r = requests.request(http_method, urljoin(self.url, endpoint),
                           json=payload,
                           headers=self._get_headers(headers, skip_auth=skip_auth),
-                          verify=True,
+                          verify=VERIFY_CERTS,
                           timeout=20)
         r.raise_for_status()
         return r.json()
@@ -73,7 +74,7 @@ class AbstractClient:
 
         r = requests.delete(urljoin(self.url, endpoint),
                             headers=self._get_headers(),
-                            verify=True,
+                            verify=VERIFY_CERTS,
                             timeout=10)
 
         r.raise_for_status()
