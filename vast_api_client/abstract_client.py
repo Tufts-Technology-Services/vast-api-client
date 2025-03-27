@@ -63,7 +63,11 @@ class AbstractClient:
                           headers=self._get_headers(headers, skip_auth=skip_auth),
                           verify=VERIFY_CERTS,
                           timeout=20)
-        r.raise_for_status()
+        try:
+            r.raise_for_status()
+        except requests.exceptions.HTTPError as e:
+            print(payload)
+            print(f'Error: {e}')
         return r.json()
 
     def _send_delete_request(self, endpoint, body=None):
