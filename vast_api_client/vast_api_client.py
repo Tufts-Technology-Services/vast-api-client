@@ -80,7 +80,11 @@ class VASTClient(AbstractClient):
         :param dry_run: if True, will not actually create the view
         :return: message indicating success or failure
         """
-        vc = ViewCreate(share=share_name, path=path, protocols=protocols, policy_id=policy_id)
+        vc = None
+        if share_name is None:
+            vc = ViewCreate(path=path, protocols=protocols, policy_id=policy_id)
+        else:
+            vc = ViewCreate(path=path, protocols=protocols, share=share_name, policy_id=policy_id)
         print(f"creating view {vc}")
         if not dry_run:
             return self._send_post_request('views/', vc.model_dump())
