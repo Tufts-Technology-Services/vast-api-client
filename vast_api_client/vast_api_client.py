@@ -1,6 +1,6 @@
 from pathlib import Path
 from urllib.parse import urljoin
-from vast_api_client.models import (PathBody, ViewCreate, QuotaCreate, FolderCreateOrUpdate,
+from vast_api_client.models import (PathBody, ViewCreate, ShareCreate, QuotaCreate, FolderCreateOrUpdate,
                                     QuotaUpdate, ProtectedPathCreate, ProtocolEnum)
 from vast_api_client.utils import ResourceExistsError
 from vast_api_client.abstract_client import AbstractClient
@@ -84,7 +84,7 @@ class VASTClient(AbstractClient):
         if share_name is None:
             vc = ViewCreate(path=path, protocols=protocols, policy_id=policy_id)
         else:
-            vc = ViewCreate(path=path, protocols=protocols, share=share_name, policy_id=policy_id)
+            vc = ShareCreate(path=path, protocols=protocols, share=share_name, policy_id=policy_id)
         print(f"creating view {vc}")
         if not dry_run:
             return self._send_post_request('views/', vc.model_dump())

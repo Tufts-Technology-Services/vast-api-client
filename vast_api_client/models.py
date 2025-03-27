@@ -1,6 +1,6 @@
 from pathlib import Path
 from typing import Set, Optional
-from enum import Enum, IntEnum
+from enum import Enum
 import re
 from pydantic import (BaseModel, ConfigDict, Field, PositiveInt, field_validator,
                       model_validator, field_serializer, InstanceOf)
@@ -53,9 +53,9 @@ class QuotaCreate(BaseModel):
         return self
 
 
-class ViewCreate(BaseModel):
+class ShareCreate(BaseModel):
     model_config = ConfigDict(extra='forbid', str_strip_whitespace=True, frozen=True)
-    share: Optional[str] # share name must end with '$'
+    share: str = None # share name must end with '$'
     path: Path
     policy_id: int = None
     protocols: Set[InstanceOf[ProtocolEnum]] = {}
@@ -98,10 +98,47 @@ class ViewCreate(BaseModel):
         return validate_path(path)
     
     @model_validator(mode="after")
-    def share_if_smb(self) -> 'ViewCreate':
+    def share_if_smb(self) -> 'ShareCreate':
         if ProtocolEnum.SMB in self.protocols and self.share is None:
             raise ValueError("SMB views require a share name")
         return self
+    
+
+class ViewCreate(BaseModel):
+    model_config = ConfigDict(extra='forbid', str_strip_whitespace=True, frozen=True)
+    path: Path
+    policy_id: int = None
+    protocols: Set[InstanceOf[ProtocolEnum]] = {}
+    create_dir: bool = True
+
+    @field_serializer('path')
+    def serialize_path(self, path: Path, _info):
+        return path.as_posix()
+
+    @field_serializer('protocols')
+    def serialize_protocols(self, protocols: Set[ProtocolEnum], _info):
+        return [i.value for i in protocols]
+    
+    @field_validator("policy_id")
+    @classmethod
+    def is_valid_policy_id(cls, policy_id: int) -> int:
+        if policy_id is None:
+            raise ValueError("policy_id must be set")
+        return policy_id
+    
+    @field_validator("protocols")
+    @classmethod
+    def is_valid_protocols(cls, protocols: Set[ProtocolEnum]) -> Set[ProtocolEnum]:
+        if len(protocols) == 0:
+            raise ValueError("protocols must not be empty")
+        else:
+            return protocols
+
+    @field_validator("path")
+    @classmethod
+    def is_valid_unix_path(cls, path: Path) -> Path:
+        return validate_path(path)
+
 
 class ProtectionPolicyFrame(BaseModel):
     model_config = ConfigDict(extra='forbid', str_strip_whitespace=True, frozen=True)
