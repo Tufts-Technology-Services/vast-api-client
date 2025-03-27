@@ -25,6 +25,7 @@ class ProtocolEnum(str, Enum):
 class PolicyEnum(IntEnum):
     SMBDefault = 5
     SMBMigration = 6
+    NFSDefault = 3
 
 
 class CloneTypeEnum(str, Enum):
