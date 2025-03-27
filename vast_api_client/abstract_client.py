@@ -68,6 +68,7 @@ class AbstractClient:
         except requests.exceptions.HTTPError as e:
             print(payload)
             print(f'Error: {e}')
+            raise e
         return r.json()
 
     def _send_delete_request(self, endpoint, body=None):

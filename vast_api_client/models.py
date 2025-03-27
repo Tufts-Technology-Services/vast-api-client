@@ -55,7 +55,7 @@ class QuotaCreate(BaseModel):
 
 class ViewCreate(BaseModel):
     model_config = ConfigDict(extra='forbid', str_strip_whitespace=True, frozen=True)
-    share: Optional[str] = None # share name must end with '$'
+    share: Optional[str] # share name must end with '$'
     path: Path
     policy_id: int = None
     protocols: Set[InstanceOf[ProtocolEnum]] = {}
