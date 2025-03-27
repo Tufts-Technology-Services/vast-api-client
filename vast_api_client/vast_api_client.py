@@ -1,7 +1,7 @@
 from pathlib import Path
 from urllib.parse import urljoin
 from vast_api_client.models import (PathBody, ViewCreate, QuotaCreate, FolderCreateOrUpdate,
-                                    QuotaUpdate, ProtectedPathCreate, ProtocolEnum, PolicyEnum)
+                                    QuotaUpdate, ProtectedPathCreate, ProtocolEnum)
 from vast_api_client.utils import ResourceExistsError
 from vast_api_client.abstract_client import AbstractClient
 
@@ -69,7 +69,7 @@ class VASTClient(AbstractClient):
     def add_view(self, path: Path,
                 protocols: set[ProtocolEnum] = None,
                 share_name: str = None,
-                policy_id: PolicyEnum = None,
+                policy_id: int = None,
                 dry_run=False):
         """
         Add a view to the storage system

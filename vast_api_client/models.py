@@ -22,12 +22,6 @@ class ProtocolEnum(str, Enum):
     NFS = 'NFS'
 
 
-class PolicyEnum(IntEnum):
-    SMBDefault = 5
-    SMBMigration = 6
-    NFSDefault = 3
-
-
 class CloneTypeEnum(str, Enum):
     LOCAL = 'LOCAL'
     REMOTE = 'REMOTE'
@@ -63,7 +57,7 @@ class ViewCreate(BaseModel):
     model_config = ConfigDict(extra='forbid', str_strip_whitespace=True, frozen=True)
     share: Optional[str] = None # share name must end with '$'
     path: Path
-    policy_id: InstanceOf[PolicyEnum] = None
+    policy_id: int = None
     protocols: Set[InstanceOf[ProtocolEnum]] = {}
     create_dir: bool = True
 
@@ -71,17 +65,13 @@ class ViewCreate(BaseModel):
     def serialize_path(self, path: Path, _info):
         return path.as_posix()
 
-    @field_serializer('policy_id')
-    def serialize_policy_id(self, policy_id: PolicyEnum, _info):
-        return policy_id.value
-
     @field_serializer('protocols')
     def serialize_protocols(self, protocols: Set[ProtocolEnum], _info):
         return [i.value for i in protocols]
     
     @field_validator("policy_id")
     @classmethod
-    def is_valid_policy_id(cls, policy_id: PolicyEnum) -> PolicyEnum:
+    def is_valid_policy_id(cls, policy_id: int) -> int:
         if policy_id is None:
             raise ValueError("policy_id must be set")
         return policy_id
