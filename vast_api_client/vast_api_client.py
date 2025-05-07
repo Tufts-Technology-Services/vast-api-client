@@ -80,6 +80,7 @@ class VASTClient(AbstractClient):
         :param dry_run: if True, will not actually create the view
         :return: message indicating success or failure
         """
+        # --gid-inheritance linux|bsd ; default is linux, but we should select bsd. new files inherit the gid of the parent directory
         vc = None
         if share_name is None:
             vc = ViewCreate(path=path, protocols=protocols, policy_id=policy_id)
