@@ -1,6 +1,6 @@
 [project]
 name = "vast-api-client"
-version = "0.2.0"
+version = "0.3.0"
 description = "code to abstract working with vast data platform api"
 authors = [{name="Chris Barnett", email="Christopher.Barnett@tufts.edu"}]
 dependencies = [
