@@ -1,6 +1,6 @@
 from pathlib import Path
 from typing import Set, Optional
-from enum import Enum
+from enum import StrEnum, verify, UNIQUE
 import re
 from pydantic import (BaseModel, ConfigDict, Field, PositiveInt, field_validator,
                       model_validator, field_serializer, InstanceOf)
@@ -17,12 +17,27 @@ def validate_path(path: Path):
         raise ValueError("invalid path")
 
 
-class ProtocolEnum(str, Enum):
+@verify(UNIQUE)
+class ProtocolEnum(StrEnum):
     SMB = 'SMB'
     NFS = 'NFS'
 
 
-class CloneTypeEnum(str, Enum):
+@verify(UNIQUE)
+class ACLPerm(StrEnum):
+    READ = 'READ'
+    CHANGE = 'CHANGE'
+    FULL = 'FULL'
+
+
+@verify(UNIQUE)
+class ACLGrantee(StrEnum):
+    USERS = 'users'
+    GROUPS = 'groups'
+    
+
+@verify(UNIQUE)
+class CloneTypeEnum(StrEnum):
     LOCAL = 'LOCAL'
     REMOTE = 'REMOTE'
 
@@ -53,6 +68,35 @@ class QuotaCreate(BaseModel):
         return self
 
 
+class ACL(BaseModel):
+    model_config = ConfigDict(extra='forbid', str_strip_whitespace=True, frozen=True)
+    fqdn: str
+    name: str
+    perm: ACLPerm
+    grantee: ACLGrantee
+    sid_str: str
+    uid_or_gid: PositiveInt
+    
+    @model_validator(mode="after")
+    def all_fields_present(self) -> 'ACL':
+        if not all([self.fqdn, self.name, self.perm, self.grantee, self.sid_str, self.uid_or_gid]):
+            raise ValueError("All fields must be present and non-empty")
+        return self
+    
+
+class ShareACLSet(BaseModel):
+    model_config = ConfigDict(extra='forbid', str_strip_whitespace=True, frozen=True)
+    enabled: bool = True
+    acl: Set[ACL]
+    
+    @model_validator(mode="after")
+    def is_enabled(self) -> 'ShareACLSet':
+        if len(self.acl) > 0 and not self.enabled:
+            raise ValueError("acls specified but enabled is False")
+        else:
+            return self
+
+
 class ShareCreate(BaseModel):
     model_config = ConfigDict(extra='forbid', str_strip_whitespace=True, frozen=True)
     share: str = None # share name must end with '$'
@@ -60,6 +104,7 @@ class ShareCreate(BaseModel):
     policy_id: int = None
     protocols: Set[InstanceOf[ProtocolEnum]] = {}
     create_dir: bool = True
+    share_acls: Optional[ShareACLSet] = None
 
     @field_serializer('path')
     def serialize_path(self, path: Path, _info):

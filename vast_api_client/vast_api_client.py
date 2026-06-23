@@ -1,6 +1,7 @@
 from pathlib import Path
 from urllib.parse import urljoin
-from vast_api_client.models import (PathBody, ViewCreate, ShareCreate, QuotaCreate, FolderCreateOrUpdate,
+from vast_api_client.models import (ACL, ACLGrantee, ACLPerm, PathBody, ViewCreate, ShareCreate, QuotaCreate, 
+                                    FolderCreateOrUpdate, ShareACLSet,
                                     QuotaUpdate, ProtectedPathCreate, ProtocolEnum)
 from vast_api_client.utils import ResourceExistsError
 from vast_api_client.abstract_client import AbstractClient
@@ -66,10 +67,19 @@ class VASTClient(AbstractClient):
             return self._send_get_request('views/', params=body)
         return self._send_get_request('views/')
 
+    @staticmethod
+    def create_acl_from_str(perm: str, grantee: str, fqdn: str, name: str, sid_str: str, uid_or_gid: int) -> ACL:
+        """
+        create an ACL object to be used with add_view
+        :return: ACL object
+        """
+        return ACL(perm=ACLPerm(perm), grantee=ACLGrantee(grantee), fqdn=fqdn, name=name, sid_str=sid_str, uid_or_gid=uid_or_gid)
+    
     def add_view(self, path: Path,
                 protocols: set[ProtocolEnum] = None,
                 share_name: str = None,
                 policy_id: int = None,
+                acls: set[ACL] = None,
                 dry_run=False):
         """
         Add a view to the storage system
@@ -77,6 +87,8 @@ class VASTClient(AbstractClient):
         :param path: path of the view
         :param protocols: set of protocols to be used with the view
         :param policy_id: policy to use with the view. create a new enum value if needed
+        :param share_name: name of the share to be used with the view. must end with '$' if specified
+        :param acls: set of ACLs to be used with the view.
         :param dry_run: if True, will not actually create the view
         :return: message indicating success or failure
         """
@@ -85,7 +97,11 @@ class VASTClient(AbstractClient):
         if share_name is None:
             vc = ViewCreate(path=path, protocols=protocols, policy_id=policy_id)
         else:
-            vc = ShareCreate(path=path, protocols=protocols, share=share_name, policy_id=policy_id)
+            if acls is not None:
+                share_acls = ShareACLSet(acl=acls)
+            else:
+                share_acls = None
+            vc = ShareCreate(path=path, protocols=protocols, share=share_name, policy_id=policy_id, share_acls=share_acls)
         print(f"creating view {vc}")
         if not dry_run:
             return self._send_post_request('views/', vc.model_dump())
