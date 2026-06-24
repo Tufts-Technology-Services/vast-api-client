@@ -12,7 +12,7 @@ class VASTClient(AbstractClient):
     used to get information from the VAST storage unit
     """
 
-    def __init__(self, host: str, user: str = None, password: str = None, token: str = None, refresh_token: str = None):
+    def __init__(self, host: str, user: str = None, password: str = None, token: str = None, refresh_token: str = None, version: str = 'v7'):
         """
         you can supply a token and refresh token directly if you have one already
         :param user:
@@ -20,9 +20,10 @@ class VASTClient(AbstractClient):
         :param host:
         :param token:
         :param refresh_token:
+        :param version: API version to use (default is 'v7')
         """
         self.host = host
-        self.url = urljoin(f'https://{host}', 'api/v5/')
+        self.url = urljoin(f'https://{host}', f'api/{version}/')
        
         if token is not None and refresh_token is not None:
             self.token = token
