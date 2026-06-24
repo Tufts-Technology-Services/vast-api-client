@@ -1,7 +1,7 @@
 from pathlib import Path
 from urllib.parse import urljoin
 from vast_api_client.models import (ACL, ACLGrantee, ACLPerm, PathBody, ViewCreate, ShareCreate, QuotaCreate, 
-                                    FolderCreateOrUpdate, ShareACLSet,
+                                    FolderCreateOrUpdate,
                                     QuotaUpdate, ProtectedPathCreate, ProtocolEnum)
 from vast_api_client.utils import ResourceExistsError
 from vast_api_client.abstract_client import AbstractClient
