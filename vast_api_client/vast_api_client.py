@@ -69,12 +69,12 @@ class VASTClient(AbstractClient):
         return self._send_get_request('views/')
 
     @staticmethod
-    def create_acl_from_str(perm: str, grantee: str, fqdn: str, name: str, sid_str: str, uid_or_gid: int) -> ACL:
+    def create_acl_from_str(perm: str, grantee: str, sid_str: str, uid_or_gid: int) -> ACL:
         """
-        create an ACL object to be used with add_view
+        create an ACL object to be used with add_view if you don't easy access to model enums
         :return: ACL object
         """
-        return ACL(perm=ACLPerm(perm), grantee=ACLGrantee(grantee), fqdn=fqdn, name=name, sid_str=sid_str, uid_or_gid=uid_or_gid)
+        return ACL(perm=ACLPerm(perm), grantee=ACLGrantee(grantee), sid_str=sid_str, uid_or_gid=uid_or_gid)
     
     def add_view(self, path: Path,
                 protocols: set[ProtocolEnum] = None,
@@ -98,11 +98,7 @@ class VASTClient(AbstractClient):
         if share_name is None:
             vc = ViewCreate(path=path, protocols=protocols, policy_id=policy_id)
         else:
-            if acls is not None:
-                share_acls = ShareACLSet(acl=acls)
-            else:
-                share_acls = None
-            vc = ShareCreate(path=path, protocols=protocols, share=share_name, policy_id=policy_id, share_acls=share_acls)
+            vc = ShareCreate(path=path, protocols=protocols, share=share_name, policy_id=policy_id, create_dir_acls=acls, inherit_acl=acls is None)
         print(f"creating view {vc}")
         if not dry_run:
             return self._send_post_request('views/', vc.model_dump())

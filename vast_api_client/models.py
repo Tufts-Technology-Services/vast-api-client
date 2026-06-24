@@ -70,12 +70,11 @@ class QuotaCreate(BaseModel):
 
 class ACL(BaseModel):
     model_config = ConfigDict(extra='forbid', str_strip_whitespace=True, frozen=True)
-    fqdn: str
-    name: str
     perm: ACLPerm
     grantee: ACLGrantee
     sid_str: str
     uid_or_gid: int
+    group_type: ProtocolEnum = ProtocolEnum.SMB
 
     @field_serializer('perm')
     def serialize_perm(self, perm: ACLPerm, _info):
@@ -84,6 +83,10 @@ class ACL(BaseModel):
     @field_serializer('grantee')
     def serialize_grantee(self, grantee: ACLGrantee, _info):
         return grantee.value
+    
+    @field_serializer('group_type')
+    def serialize_group_type(self, group_type: ProtocolEnum, _info):
+        return group_type.value
 
     @field_validator("uid_or_gid")
     @classmethod
@@ -94,26 +97,9 @@ class ACL(BaseModel):
 
     @model_validator(mode="after")
     def all_fields_present(self) -> 'ACL':
-        if not all([self.fqdn, self.name, self.perm, self.grantee, self.sid_str, self.uid_or_gid is not None]):
+        if not all([self.perm, self.grantee, self.sid_str, self.uid_or_gid is not None]):
             raise ValueError("All fields must be present and non-empty")
         return self
-    
-
-class ShareACLSet(BaseModel):
-    model_config = ConfigDict(extra='forbid', str_strip_whitespace=True, frozen=True)
-    enabled: bool = True
-    acl: Set[ACL]
-
-    @field_serializer('acl')
-    def serialize_acl(self, acl: Set[ACL], _info):
-        return [i.dict() for i in acl]
-    
-    @model_validator(mode="after")
-    def is_enabled(self) -> 'ShareACLSet':
-        if len(self.acl) > 0 and not self.enabled:
-            raise ValueError("acls specified but enabled is False")
-        else:
-            return self
 
 
 class ShareCreate(BaseModel):
@@ -123,7 +109,8 @@ class ShareCreate(BaseModel):
     policy_id: int = None
     protocols: Set[InstanceOf[ProtocolEnum]] = {}
     create_dir: bool = True
-    share_acls: Optional[ShareACLSet] = None
+    inherit_acl: bool = True
+    create_dir_acls: Set[ACL] = {}
 
     @field_serializer('path')
     def serialize_path(self, path: Path, _info):
