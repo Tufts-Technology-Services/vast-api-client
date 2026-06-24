@@ -86,7 +86,7 @@ class ACL(BaseModel):
 
     @model_validator(mode="after")
     def all_fields_present(self) -> 'ACL':
-        if not all([self.fqdn, self.name, self.perm, self.grantee, self.sid_str, self.uid_or_gid]):
+        if not all([self.fqdn, self.name, self.perm, self.grantee, self.sid_str, self.uid_or_gid is not None]):
             raise ValueError("All fields must be present and non-empty")
         return self
     
