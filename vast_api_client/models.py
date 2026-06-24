@@ -75,8 +75,15 @@ class ACL(BaseModel):
     perm: ACLPerm
     grantee: ACLGrantee
     sid_str: str
-    uid_or_gid: PositiveInt
-    
+    uid_or_gid: int
+
+    @field_validator("uid_or_gid")
+    @classmethod
+    def is_valid_uid_or_gid(cls, uid_or_gid: int) -> int:
+        if uid_or_gid < 0:
+            raise ValueError("uid_or_gid must be non-negative")
+        return uid_or_gid
+
     @model_validator(mode="after")
     def all_fields_present(self) -> 'ACL':
         if not all([self.fqdn, self.name, self.perm, self.grantee, self.sid_str, self.uid_or_gid]):
