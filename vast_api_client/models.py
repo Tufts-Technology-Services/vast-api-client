@@ -123,6 +123,7 @@ class ShareCreate(BaseModel):
     policy_id: int = None
     protocols: Set[InstanceOf[ProtocolEnum]] = {}
     create_dir: bool = True
+    inherit_acl: bool = True
     share_acls: Optional[ShareACLSet] = None
 
     @field_serializer('path')
