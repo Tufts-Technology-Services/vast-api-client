@@ -77,6 +77,14 @@ class ACL(BaseModel):
     sid_str: str
     uid_or_gid: int
 
+    @field_serializer('perm')
+    def serialize_perm(self, perm: ACLPerm, _info):
+        return perm.value
+    
+    @field_serializer('grantee')
+    def serialize_grantee(self, grantee: ACLGrantee, _info):
+        return grantee.value
+
     @field_validator("uid_or_gid")
     @classmethod
     def is_valid_uid_or_gid(cls, uid_or_gid: int) -> int:
@@ -95,6 +103,10 @@ class ShareACLSet(BaseModel):
     model_config = ConfigDict(extra='forbid', str_strip_whitespace=True, frozen=True)
     enabled: bool = True
     acl: Set[ACL]
+
+    @field_serializer('acl')
+    def serialize_acl(self, acl: Set[ACL], _info):
+        return [i.dict() for i in acl]
     
     @model_validator(mode="after")
     def is_enabled(self) -> 'ShareACLSet':
