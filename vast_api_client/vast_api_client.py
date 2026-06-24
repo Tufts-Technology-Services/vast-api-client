@@ -129,7 +129,7 @@ class VASTClient(AbstractClient):
             raise ValueError('acls must be provided')
         self._send_patch_request(f'views/{view_id}/', {"share_acl": {"enabled": True}})
         share_acls = ShareACLSet(acl=acls)
-        return self._send_patch_request(f'views/{view_id}/', {"share_acl": share_acls.model_dump()})
+        return self._send_patch_request(f'views/{view_id}/', share_acls.model_dump())
     
     def add_quota(self, name: str, path: Path,
                 hard_limit: int, soft_limit: int = None,
