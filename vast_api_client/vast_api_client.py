@@ -100,17 +100,37 @@ class VASTClient(AbstractClient):
         else:
             if acls is not None:
                 share_acls = ShareACLSet(acl=acls)
+                inherit_acl = False
             else:
                 share_acls = None
-            vc = ShareCreate(path=path, protocols=protocols, share=share_name, policy_id=policy_id, share_acls=share_acls)
+                inherit_acl = True
+            vc = ShareCreate(path=path, protocols=protocols, share=share_name, policy_id=policy_id, share_acls=share_acls, inherit_acl=inherit_acl)
         print(f"creating view {vc}")
         if not dry_run:
-            return self._send_post_request('views/', vc.model_dump())
+            r = self._send_post_request('views/', vc.model_dump())
+            if acls is None:
+                return r
+            else:
+                return self.enable_share_acls(r['id'], acls)
+
         
         print('skipping creation for dry run!')
         print(vc.model_dump())
         return None
 
+    def enable_share_acls(self, view_id: str, acls: set[ACL]):
+        """
+        Enable share ACLs for a specific share
+        :param view_id: ID of the view
+        :param acls: set of ACLs to be used with the share
+        :return: message indicating success or failure
+        """
+        if acls is None:
+            raise ValueError('acls must be provided')
+        self._send_patch_request(f'views/{view_id}/', {"share_acl": {"enabled": True}})
+        share_acls = ShareACLSet(acl=acls)
+        return self._send_patch_request(f'views/{view_id}/', share_acls.model_dump())
+    
     def add_quota(self, name: str, path: Path,
                 hard_limit: int, soft_limit: int = None,
                 dry_run=False):
