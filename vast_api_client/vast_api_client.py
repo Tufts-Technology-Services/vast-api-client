@@ -98,7 +98,7 @@ class VASTClient(AbstractClient):
         if share_name is None:
             vc = ViewCreate(path=path, protocols=protocols, policy_id=policy_id)
         else:
-            vc = ShareCreate(path=path, protocols=protocols, share=share_name, policy_id=policy_id, create_dir_acls=acls, inherit_acl=acls is None)
+            vc = ShareCreate(path=path, protocols=protocols, share=share_name, policy_id=policy_id, create_dir_acls=acls)
         print(f"creating view {vc}")
         if not dry_run:
             return self._send_post_request('views/', vc.model_dump(mode='json'))
