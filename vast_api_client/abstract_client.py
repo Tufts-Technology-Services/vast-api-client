@@ -1,6 +1,9 @@
 from urllib.parse import urljoin
 import os
+import logging
 import requests
+
+logger = logging.getLogger(__name__)
 
 VERIFY_CERTS = os.getenv('VERIFY_CERTS', 'True').lower() in ['true', '1', 'yes']
 
@@ -27,10 +30,11 @@ class AbstractClient:
             self.renew_token(self.refresh_token)
 
         r = requests.get(urljoin(self.url, endpoint),
-                         params=params if not None else {},
+                         params=params if params is not None else {},
                          headers=self._get_headers(),
                          verify=VERIFY_CERTS,
                          timeout=30)
+        logger.debug(f"GET {r.url} - Status Code: {r.status_code}")
         try:
             r.raise_for_status()
         except requests.exceptions.HTTPError as e:
@@ -63,10 +67,12 @@ class AbstractClient:
                           headers=self._get_headers(headers, skip_auth=skip_auth),
                           verify=VERIFY_CERTS,
                           timeout=20)
+        logger.debug(f"{http_method} {r.url} - Status Code: {r.status_code}")
+        logger.debug(f"Request Payload: {payload}")
         try:
             r.raise_for_status()
         except requests.exceptions.HTTPError as e:
-            print(f'Error: {e}')
+            logger.error(f'HTTP Error: {e}')
             raise e
         return r.json()
 
@@ -80,6 +86,10 @@ class AbstractClient:
                             headers=self._get_headers(),
                             verify=VERIFY_CERTS,
                             timeout=10)
-
-        r.raise_for_status()
+        logger.debug(f"DELETE {r.url} - Status Code: {r.status_code}")
+        try:
+            r.raise_for_status()
+        except requests.exceptions.HTTPError as e:
+            logger.error(f'HTTPError: {e}')
+            raise e
         return {'status': r.status_code}
