@@ -57,14 +57,14 @@ class VASTClient(AbstractClient):
         :return: list of quotas
         """
         if path is not None:
-            body = PathBody(path=path).model_dump()
+            body = PathBody(path=path).model_dump(mode='json')
             return self._send_get_request('quotas/', params=body)
         else:
             return self._send_get_request('quotas/')
 
     def get_views(self, path: Path = None):
         if path is not None:
-            body = PathBody(path=path).model_dump()
+            body = PathBody(path=path).model_dump(mode='json')
             return self._send_get_request('views/', params=body)
         return self._send_get_request('views/')
 
@@ -101,10 +101,10 @@ class VASTClient(AbstractClient):
             vc = ShareCreate(path=path, protocols=protocols, share=share_name, policy_id=policy_id, create_dir_acls=acls, inherit_acl=acls is None)
         print(f"creating view {vc}")
         if not dry_run:
-            return self._send_post_request('views/', vc.model_dump())
+            return self._send_post_request('views/', vc.model_dump(mode='json'))
         
         print('skipping creation for dry run!')
-        print(vc.model_dump())
+        print(vc.model_dump(mode='json'))
         return None
 
     def add_quota(self, name: str, path: Path,
@@ -124,9 +124,9 @@ class VASTClient(AbstractClient):
         print(f"creating quota {qc}")
         if dry_run:
             print('skipping creation for dry run!')
-            print(qc.model_dump())
+            print(qc.model_dump(mode='json'))
         else:
-            return self._send_post_request('quotas/', qc.model_dump())
+            return self._send_post_request('quotas/', qc.model_dump(mode='json'))
     
     def add_folder(self, path: Path, group: str, user: str = None):
         """
@@ -137,7 +137,7 @@ class VASTClient(AbstractClient):
         """
         owner_is_group = (group == user)
         folder = FolderCreateOrUpdate(path=path, owner_is_group=owner_is_group, user=user, group=group)
-        return self._send_post_request('folders/create_folder/', folder.model_dump())
+        return self._send_post_request('folders/create_folder/', folder.model_dump(mode='json'))
 
     def modify_folder(self, path: Path, group: str, user: str = None):
         """
@@ -155,13 +155,13 @@ class VASTClient(AbstractClient):
             folder = FolderCreateOrUpdate(path=path, group=group, user=user)
         else:
             folder = FolderCreateOrUpdate(path=path, group=group, user=user, owner_is_group=owner_is_group)
-        return self._send_post_request('folders/create_folder/', folder.model_dump(exclude_unset=True, exclude_defaults=True))
+        return self._send_post_request('folders/create_folder/', folder.model_dump(exclude_unset=True, exclude_defaults=True, mode='json'))
 
     def delete_folder(self, path: Path, tenant_id: int = None):
         """
         DELETE /folders/delete_folder/
         """
-        body = PathBody(path=path).model_dump()
+        body = PathBody(path=path).model_dump(mode='json')
         if tenant_id is not None:
             body['tenant_id'] = tenant_id
         return self._send_delete_request('folders/delete_folder/', body)
@@ -179,7 +179,7 @@ class VASTClient(AbstractClient):
             "children": 0
         }
         """
-        body = PathBody(path=path).model_dump()
+        body = PathBody(path=path).model_dump(mode='json')
         if tenant_id is not None:
             body['tenant_id'] = tenant_id
         return self._send_post_request('folders/stat_path/', body)
@@ -192,7 +192,7 @@ class VASTClient(AbstractClient):
         """
         if isinstance(quota_id, int) and isinstance(new_size, int):
             body = QuotaUpdate(soft_limit=new_size, hard_limit=new_size)
-            return self._send_patch_request(f'quotas/{str(quota_id)}/', body.model_dump())
+            return self._send_patch_request(f'quotas/{str(quota_id)}/', body.model_dump(mode='json'))
         else:
             raise TypeError('quota_id and size must be of type int')
 
@@ -226,7 +226,7 @@ class VASTClient(AbstractClient):
         if source_dir.as_posix() in [i['source_dir'] for i in protected_paths]:
             raise ResourceExistsError(f'This path already exists as a protected path on {self.host}!')
         ppc = ProtectedPathCreate(name=name, source_dir=source_dir, protection_policy_id=protection_policy_id, tenant_id=tenant_id)
-        return self._send_post_request('protectedpaths/', ppc.model_dump())
+        return self._send_post_request('protectedpaths/', ppc.model_dump(mode='json'))
     
     def get_protection_policies(self, name: str = None, policy_id: int = None, source_dir: Path = None):
         if id is not None:
