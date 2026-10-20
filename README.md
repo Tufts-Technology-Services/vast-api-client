@@ -5,17 +5,20 @@ This is a client library for interacting with the VAST web API. VAST is the stor
 
 
 ## Usage
-To instantiate and authenticate:
+Requests go through [vastpy](https://github.com/vast-data/vastpy). Authenticate with a user and password
+(HTTP basic auth) or with an API token, not both. Nothing is sent until the first request.
 ```
-vast = VASTClientAPI('https://url_to_api_endpoint')
-vast.get_token('username', 'password')
+from vast_api_client import VASTClient
+
+vast = VASTClient('vast.example.edu', 'username', 'password')
+vast = VASTClient('vast.example.edu', token='api_token', tenant='tenant_name')
 ```
 
- or
+The server certificate is checked against certifi's CA bundle, or `ca_file='/path/to/ca.pem'`.
+`verify=False` (or the env var `VERIFY_CERTS=false`) turns checking off. The API version defaults to `v7`.
 
- ```
-vast = VASTClientAPI('https://url_to_api_endpoint', token='api_token', refresh_token='api_refresh_token')
-```
+Failed requests raise `VastAPIError` (`VastNotFoundError` for a 404) or `VastConnectionError`, all subclasses
+of `VastError`. Endpoints without a wrapper method are reachable through vastpy directly: `vast.api['clusters'].get()`.
 
 currently supports:
 get/create quota

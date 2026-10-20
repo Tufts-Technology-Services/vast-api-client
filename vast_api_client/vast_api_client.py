@@ -1,8 +1,18 @@
 import logging
+import os
 from pathlib import Path
-from urllib.parse import urljoin
 
-from vast_api_client.abstract_client import AbstractClient
+import certifi
+import urllib3
+import vastpy
+
+from vast_api_client.credentials import VastCredentials
+from vast_api_client.exceptions import (
+    ResourceExistsError,
+    VastAPIError,
+    VastConnectionError,
+    VastNotFoundError,
+)
 from vast_api_client.models import (
     ACL,
     ACLGrantee,
@@ -16,14 +26,27 @@ from vast_api_client.models import (
     ShareCreate,
     ViewCreate,
 )
-from vast_api_client.utils import ResourceExistsError
 
 logger = logging.getLogger(__name__)
 
+# urllib3 puts fields in the query string for these methods; for any other it would send them as a form body
+QUERY_STRING_METHODS = {"GET", "HEAD", "OPTIONS", "DELETE"}
 
-class VASTClient(AbstractClient):
+
+def _verify_certs_from_env() -> bool:
+    """Legacy switch: VERIFY_CERTS=false (or 0, no) turns off certificate verification."""
+    return os.getenv("VERIFY_CERTS", "true").strip().lower() not in ("false", "0", "no")
+
+
+def _reveal(secret) -> str | None:
+    return secret.get_secret_value() if secret is not None else None
+
+
+class VASTClient:
     """
-    used to get information from the VAST storage unit
+    used to get information from the VAST storage unit.
+    Requests go through vastpy. Its client is exposed as `api`, for endpoints not wrapped here:
+    vast.api["quotas"].get(path="/rstore/lab")
     """
 
     def __init__(
@@ -31,66 +54,79 @@ class VASTClient(AbstractClient):
         host: str,
         user: str = None,
         password: str = None,
+        *,
         token: str = None,
-        refresh_token: str = None,
+        tenant: str = None,
         version: str = "v7",
+        ca_file: str | Path = None,
+        verify: bool = True,
     ):
         """
-        you can supply a token and refresh token directly if you have one already
+        supply either user and password, or an API token. Nothing is sent until the first request.
+        :param host: VMS address, without scheme: "vast.example.edu"
         :param user:
         :param password:
-        :param host:
-        :param token:
-        :param refresh_token:
+        :param token: API token, sent as "Authorization: Api-Token <token>"
+        :param tenant: tenant name, sent as X-Tenant-Name
         :param version: API version to use (default is 'v7')
+        :param ca_file: CA bundle to verify the server certificate with (default is certifi's)
+        :param verify: False skips certificate verification, as does the env var VERIFY_CERTS=false
         """
+        credentials = VastCredentials(user=user, password=password, token=token, tenant=tenant)
         self.host = host
-        self.url = urljoin(f"https://{host}", f"api/{version}/")
+        self.version = version
 
-        if token is not None and refresh_token is not None:
-            self.token = token
-            self.refresh_token = refresh_token
-        elif user is not None and password is not None:
-            self.get_token(user, password)
+        if verify and _verify_certs_from_env():
+            cert_file = str(ca_file) if ca_file is not None else certifi.where()
         else:
-            raise ValueError("You must supply either a username and password or a token and refresh token")
+            # vastpy skips verification when it gets no cert_file
+            logger.warning(f"TLS certificate verification is off for {host}")
+            cert_file = None
 
-    def get_token(self, username, passwd) -> None:
-        """
-        use to get a token and refresh token. token has key 'access', refresh token has key 'refresh'
-        :param username:
-        :param passwd:
-        """
-        body = {"username": username, "password": passwd}
-        r = self._send_post_request("token/", body, skip_auth=True)
-        self.token = r["access"]
-        self.refresh_token = r["refresh"]
+        self.api = vastpy.VASTClient(
+            user=credentials.user,
+            password=_reveal(credentials.password),
+            token=_reveal(credentials.token),
+            tenant=credentials.tenant,
+            address=host,
+            cert_file=cert_file,
+            version=version,
+        )
 
-    def renew_token(self, refresh_token) -> None:
-        body = {"refresh": refresh_token}
-        r = self._send_post_request("token/refresh/", body, skip_auth=True)
-        self.token = r["access"]
-        self.refresh_token = r["refresh"]
+    def __repr__(self):
+        return f"VASTClient(host={self.host!r}, version={self.version!r})"
 
     def _call(self, method: str, endpoint: str, *, query: dict = None, body: dict = None):
         """
         Send one request to the API. Every request the client makes goes through here.
         :param method: GET, POST, PATCH or DELETE
         :param endpoint: path below api/<version>/, without leading or trailing slashes: "quotas/5"
-        :param query: query parameters, for GET
+        :param query: query parameters, for GET and DELETE
         :param body: JSON body, for POST, PATCH and DELETE
-        :return: the parsed JSON response
+        :return: the parsed JSON response, or None if the response has no JSON body
+        :raises VastNotFoundError: the API answered 404
+        :raises VastAPIError: the API answered with another non-2xx status
+        :raises VastConnectionError: no HTTP answer: connection refused, TLS failure, etc.
         """
-        path = f"{endpoint}/"
-        if method == "GET":
-            return self._send_get_request(path, params=query)
-        if method == "POST":
-            return self._send_post_request(path, body)
-        if method == "PATCH":
-            return self._send_patch_request(path, body)
-        if method == "DELETE":
-            return self._send_delete_request(path, body)
-        raise ValueError(f"Unsupported HTTP method: {method}")
+        if query and method not in QUERY_STRING_METHODS:
+            raise ValueError(f"query parameters can't be sent with {method}")
+        logger.debug(f"{method} {endpoint} query={query} body={body}")
+        try:
+            result = self.api[endpoint].request(method, fields=query, data=body)
+        except vastpy.RESTFailure as failure:
+            error_class = VastNotFoundError if failure.status == 404 else VastAPIError
+            raise error_class(
+                status=failure.status,
+                method=method,
+                endpoint=endpoint,
+                body=failure.data.decode("utf-8", errors="replace"),
+            ) from failure
+        except urllib3.exceptions.HTTPError as error:
+            raise VastConnectionError(f"{method} {endpoint} on {self.host} failed: {error}") from error
+        # vastpy returns raw bytes when the response has no JSON body: b"" for a 204
+        if isinstance(result, bytes):
+            return None
+        return result
 
     def get_quotas(self, path: Path = None):
         """
@@ -221,11 +257,13 @@ class VASTClient(AbstractClient):
     def delete_folder(self, path: Path, tenant_id: int = None):
         """
         DELETE /folders/delete_folder/
+        :return: {"status": "deleted"}; a failure raises
         """
         body = PathBody(path=path).model_dump(mode="json")
         if tenant_id is not None:
             body["tenant_id"] = tenant_id
-        return self._call("DELETE", "folders/delete_folder", body=body)
+        self._call("DELETE", "folders/delete_folder", body=body)
+        return {"status": "deleted"}
 
     def get_folder(self, path: Path, tenant_id: int = None):
         """
@@ -258,8 +296,12 @@ class VASTClient(AbstractClient):
             raise TypeError("quota_id and size must be of type int")
 
     def delete_quota(self, quota_id: int):
+        """
+        :return: {"status": "deleted"}; a failure raises
+        """
         if isinstance(quota_id, int):
-            return self._call("DELETE", f"quotas/{quota_id}")
+            self._call("DELETE", f"quotas/{quota_id}")
+            return {"status": "deleted"}
         else:
             raise TypeError("quota_id must be of type int")
 

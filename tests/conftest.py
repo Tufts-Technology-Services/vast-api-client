@@ -22,7 +22,7 @@ def api_calls():
 
 @pytest.fixture
 def vast(api_calls):
-    # a token and refresh token, so the constructor doesn't log in
-    client = VASTClient("vast.example.edu", token="access", refresh_token="refresh")
+    # the constructor sends nothing, so a user and password are safe here
+    client = VASTClient("vast.example.edu", "alice", "secret")
     client._call = api_calls
     return client

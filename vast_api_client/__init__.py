@@ -1,3 +1,11 @@
+from vast_api_client.credentials import VastCredentials
+from vast_api_client.exceptions import (
+    ResourceExistsError,
+    VastAPIError,
+    VastConnectionError,
+    VastError,
+    VastNotFoundError,
+)
 from vast_api_client.models import (
     ACL,
     ACLGrantee,
@@ -30,8 +38,14 @@ __all__ = [
     "ProtocolEnum",
     "QuotaCreate",
     "QuotaUpdate",
+    "ResourceExistsError",
     "ShareCreate",
     "VASTClient",
+    "VastAPIError",
+    "VastConnectionError",
+    "VastCredentials",
+    "VastError",
+    "VastNotFoundError",
     "ViewCreate",
     "validate_path",
 ]
