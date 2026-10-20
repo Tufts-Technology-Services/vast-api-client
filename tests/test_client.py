@@ -317,27 +317,44 @@ def test_query_catalog(vast, api_calls):
 
     assert api_calls.requests == [
         (
-            "POST",
+            "GET",
             "bigcatalogconfig/query_data",
-            None,
             {
                 "path": "/",
-                "filters": {"parent_path": [{"eq": "/smb/gisusers/"}], "element_type": [{"eq": "DIR"}]},
+                "filters": '{"parent_path": [{"eq": "/smb/gisusers/"}], "element_type": [{"eq": "DIR"}]}',
                 "fields": ["name"],
+                "limit": 1000,
             },
+            None,
         )
     ]
 
 
 def test_query_catalog_with_fields_and_path(vast, api_calls):
-    vast.query_catalog({"size": [{"ge": 1048576}]}, fields=["name", "size"], path="/rstore/")
+    vast.query_catalog(
+        {"size": [{"ge": 1048576, "lt": 1073741824}]},
+        fields=["name", "size"],
+        path="/rstore/",
+        limit=50,
+        ordering=["name"],
+        snapshot="daily",
+        tenant_id=1,
+    )
 
     assert api_calls.requests == [
         (
-            "POST",
+            "GET",
             "bigcatalogconfig/query_data",
+            {
+                "path": "/rstore/",
+                "filters": '{"size": [{"ge": 1048576, "lt": 1073741824}]}',
+                "fields": ["name", "size"],
+                "limit": 50,
+                "ordering": ["name"],
+                "snapshot": "daily",
+                "tenant_id": 1,
+            },
             None,
-            {"path": "/rstore/", "filters": {"size": [{"ge": 1048576}]}, "fields": ["name", "size"]},
         )
     ]
 

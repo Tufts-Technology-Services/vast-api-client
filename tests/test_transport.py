@@ -554,3 +554,23 @@ def test_endpoint_client_keeps_the_url():
 
     assert root.endpoint_client("folders/stat_path", timeout=60)._url == root["folders/stat_path"]._url
     assert root.endpoint_client("quotas")._timeout is root._timeout
+
+
+def test_query_catalog_is_a_get_with_its_query_in_the_url(client, vms):
+    vms.reply_json({"count": 1, "next": None, "prop_list": ["name"], "results": [["vyang02"]]})
+
+    response = client.query_catalog(
+        {"parent_path": [{"eq": "/projects/lab/"}]}, fields=["name", "size"], ordering=["name"], limit=50
+    )
+
+    sent = vms.requests[0]
+    assert (sent.method, sent.url, sent.body) == ("GET", f"https://{HOST}/api/v7/bigcatalogconfig/query_data/", None)
+    assert sent.fields == [
+        ("path", "/"),
+        ("filters", '{"parent_path": [{"eq": "/projects/lab/"}]}'),
+        ("fields", "name"),
+        ("fields", "size"),
+        ("limit", 50),
+        ("ordering", "name"),
+    ]
+    assert response["results"] == [["vyang02"]]

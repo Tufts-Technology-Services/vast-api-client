@@ -1,5 +1,6 @@
 """What the request models accept, reject and serialize."""
 
+import json
 from pathlib import Path
 
 import pytest
@@ -378,7 +379,47 @@ GISUSERS_FILTERS = {"parent_path": [{"eq": "/smb/gisusers/"}], "element_type": [
 def test_catalog_query_defaults():
     query = CatalogQuery(filters=GISUSERS_FILTERS)
 
-    assert query.model_dump(mode="json") == {"path": "/", "filters": GISUSERS_FILTERS, "fields": ["name"]}
+    assert query.model_dump(mode="json", exclude_none=True) == {
+        "path": "/",
+        "filters": GISUSERS_FILTERS,
+        "fields": ["name"],
+        "limit": 1000,
+    }
+
+
+def test_catalog_query_params():
+    query = CatalogQuery(
+        filters=GISUSERS_FILTERS, fields=["name", "size"], limit=50, ordering=["name"], snapshot="daily", tenant_id=1
+    )
+
+    assert query.query_params() == {
+        "path": "/",
+        "filters": json.dumps(GISUSERS_FILTERS),
+        "fields": ["name", "size"],
+        "limit": 50,
+        "ordering": ["name"],
+        "snapshot": "daily",
+        "tenant_id": 1,
+    }
+
+
+def test_catalog_query_params_leave_out_what_isnt_set():
+    assert set(CatalogQuery(filters=GISUSERS_FILTERS).query_params()) == {"path", "filters", "fields", "limit"}
+
+
+def test_catalog_query_operators_in_one_condition_are_kept_together():
+    filters = {"size": [{"ge": 1024, "lt": 1048576}], "mtime": [{"gt": "1727863200000"}, {"lt": "1729591200000"}]}
+
+    assert json.loads(CatalogQuery(filters=filters).query_params()["filters"]) == filters
+
+
+@pytest.mark.parametrize(
+    "extra",
+    [{"limit": 0}, {"limit": -5}, {"ordering": [""]}, {"snapshot": ""}, {"tenant_id": 0}, {"page": 2}],
+)
+def test_catalog_query_rejects_paging_and_scope(extra):
+    with pytest.raises(ValueError):
+        CatalogQuery(filters=GISUSERS_FILTERS, **extra)
 
 
 def test_catalog_query_defaults_are_not_shared():
@@ -434,7 +475,6 @@ def test_catalog_query_rejects_operator(operator):
 @pytest.mark.parametrize(
     "filters",
     [
-        {"size": [{"gt": 1, "lt": 10}]},
         {"size": [{}]},
         {"size": []},
         {"": [{"eq": "x"}]},

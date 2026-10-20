@@ -1,3 +1,4 @@
+import json
 import re
 from enum import UNIQUE, StrEnum, verify
 from pathlib import Path
@@ -62,8 +63,8 @@ class CloneTypeEnum(StrEnum):
 # and lt appear in the KB's catalog examples. contains and gte are documented as rejected (400), so
 # they are left out.
 CatalogOperator = Literal["eq", "startswith", "gt", "ge", "lt", "le"]
-# a single {operator: value} pair
-CatalogCondition = Annotated[dict[CatalogOperator, Any], Field(min_length=1, max_length=1)]
+# {operator: value, ...}: the operators in one condition are AND'ed, as in a range {"ge": 1, "lt": 10}
+CatalogCondition = Annotated[dict[CatalogOperator, Any], Field(min_length=1)]
 NonEmptyStr = Annotated[str, Field(min_length=1)]
 
 
@@ -215,9 +216,10 @@ class FolderCreateOrUpdate(BaseModel):
 
 class CatalogQuery(BaseModel):
     """
-    body for POST bigcatalogconfig/query_data. filters maps a catalog column to conditions,
-    each a single {operator: value} pair:
-    {'parent_path': [{'eq': '/smb/gisusers/'}], 'element_type': [{'eq': 'DIR'}]}
+    query for GET bigcatalogconfig/query_data. filters maps a catalog column to a list of conditions,
+    which are OR'ed; the operators within one condition are AND'ed:
+    {'parent_path': [{'eq': '/smb/gisusers/'}], 'size': [{'ge': 1024, 'lt': 1048576}]}
+    There's no page: VAST 5.3 refuses it (400), and a query needing a second page doesn't return.
     """
 
     model_config = ConfigDict(extra="forbid", str_strip_whitespace=True, frozen=True)
@@ -225,6 +227,17 @@ class CatalogQuery(BaseModel):
     # VAST rejects a query without a filter
     filters: dict[NonEmptyStr, Annotated[list[CatalogCondition], Field(min_length=1)]] = Field(min_length=1)
     fields: list[NonEmptyStr] = Field(default_factory=lambda: ["name"], min_length=1)
+    # always sent: VAST 5.3 documents no default. It has to be at least the number of rows that match.
+    limit: PositiveInt = 1000
+    ordering: list[NonEmptyStr] | None = None
+    snapshot: NonEmptyStr | None = None
+    tenant_id: PositiveInt | None = None
+
+    def query_params(self) -> dict[str, Any]:
+        """as GET query parameters: filters as the JSON string VAST expects, and None left out"""
+        params = self.model_dump(mode="json", exclude_none=True)
+        params["filters"] = json.dumps(params["filters"])
+        return params
 
     # validate_path rejects "/" and trailing slashes, both of which catalog queries use
     @field_validator("path")
