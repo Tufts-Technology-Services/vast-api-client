@@ -28,11 +28,19 @@ class VastAPIError(VastError):
     @property
     def code(self) -> str | None:
         """the "code" in VAST's JSON error body, such as "service_unavailable"; None if there isn't one"""
+        return self._error_body_field("code")
+
+    @property
+    def detail(self) -> str | None:
+        """the "detail" in VAST's JSON error body, its message; None if there isn't one"""
+        return self._error_body_field("detail")
+
+    def _error_body_field(self, name: str) -> str | None:
         try:
             error_body = json.loads(self.body)
         except ValueError:
             return None
-        return error_body.get("code") if isinstance(error_body, dict) else None
+        return error_body.get(name) if isinstance(error_body, dict) else None
 
 
 class VastNotFoundError(VastAPIError):

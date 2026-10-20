@@ -38,8 +38,10 @@ logger = logging.getLogger(__name__)
 
 # VAST answers folders/stat_path for a path that doesn't exist with a 503, not a 404:
 # {"detail": "Template directory path wasn't found", "code": "service_unavailable"}
+# service_unavailable alone is any 503's code, so the detail has to say the path wasn't found too
 MISSING_FOLDER_STATUS = 503
 MISSING_FOLDER_CODE = "service_unavailable"
+MISSING_FOLDER_DETAIL = "path wasn't found"
 
 # urllib3 puts fields in the query string for these methods; for any other it would send them as a form body
 QUERY_STRING_METHODS = {"GET", "HEAD", "OPTIONS", "DELETE"}
@@ -299,7 +301,11 @@ class VASTClient:
         try:
             return self._call("POST", "folders/stat_path", body=body)
         except VastAPIError as error:
-            if error.status == MISSING_FOLDER_STATUS and error.code == MISSING_FOLDER_CODE:
+            if (
+                error.status == MISSING_FOLDER_STATUS
+                and error.code == MISSING_FOLDER_CODE
+                and MISSING_FOLDER_DETAIL in (error.detail or "")
+            ):
                 raise VastNotFoundError(
                     status=error.status, method=error.method, endpoint=error.endpoint, body=error.body
                 ) from error

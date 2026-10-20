@@ -462,6 +462,8 @@ def test_get_folder_of_a_missing_path_raises_not_found(client, vms):
     "status, body",
     [
         (503, b'{"detail":"VMS is busy","code":"throttled"}'),
+        (503, b'{"detail":"VMS is busy","code":"service_unavailable"}'),
+        (503, b'{"code":"service_unavailable"}'),
         (503, b"<html>503 Service Unavailable</html>"),
         (500, MISSING_FOLDER_BODY),
     ],
@@ -503,3 +505,15 @@ def test_a_missing_folder_503_elsewhere_is_not_mapped(client, vms):
 )
 def test_api_error_code(body, code):
     assert VastAPIError(status=503, method="GET", endpoint="quotas", body=body).code == code
+
+
+@pytest.mark.parametrize(
+    "body, detail",
+    [
+        (MISSING_FOLDER_BODY.decode(), "Template directory path wasn't found"),
+        ('{"code": "x"}', None),
+        ("<html>bad gateway</html>", None),
+    ],
+)
+def test_api_error_detail(body, detail):
+    assert VastAPIError(status=503, method="GET", endpoint="quotas", body=body).detail == detail
