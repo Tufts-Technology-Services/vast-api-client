@@ -50,9 +50,7 @@ class VASTClient(AbstractClient):
         elif user is not None and password is not None:
             self.get_token(user, password)
         else:
-            raise ValueError(
-                "You must supply either a username and password or a token and refresh token"
-            )
+            raise ValueError("You must supply either a username and password or a token and refresh token")
 
     def get_token(self, username, passwd) -> None:
         """
@@ -90,9 +88,7 @@ class VASTClient(AbstractClient):
         return self._send_get_request("views/")
 
     @staticmethod
-    def create_acl_from_str(
-        perm: str, grantee: str, sid_str: str, uid_or_gid: int
-    ) -> ACL:
+    def create_acl_from_str(perm: str, grantee: str, sid_str: str, uid_or_gid: int) -> ACL:
         """
         create an ACL object to be used with add_view if you don't easy access to model enums
         :return: ACL object
@@ -162,9 +158,7 @@ class VASTClient(AbstractClient):
         :return: message indicating success or failure
         """
         name = name.removesuffix("$")
-        qc = QuotaCreate(
-            name=name, path=path, soft_limit=soft_limit, hard_limit=hard_limit
-        )
+        qc = QuotaCreate(name=name, path=path, soft_limit=soft_limit, hard_limit=hard_limit)
         print(f"creating quota {qc}")
         if dry_run:
             print("skipping creation for dry run!")
@@ -180,12 +174,8 @@ class VASTClient(AbstractClient):
         :param user: user that owns the folder
         """
         owner_is_group = group == user
-        folder = FolderCreateOrUpdate(
-            path=path, owner_is_group=owner_is_group, user=user, group=group
-        )
-        return self._send_post_request(
-            "folders/create_folder/", folder.model_dump(mode="json")
-        )
+        folder = FolderCreateOrUpdate(path=path, owner_is_group=owner_is_group, user=user, group=group)
+        return self._send_post_request("folders/create_folder/", folder.model_dump(mode="json"))
 
     def modify_folder(self, path: Path, group: str, user: str = None):
         """
@@ -198,15 +188,11 @@ class VASTClient(AbstractClient):
         if user is None and owner_is_group is None:
             folder = FolderCreateOrUpdate(path=path, group=group)
         elif user is None:
-            folder = FolderCreateOrUpdate(
-                path=path, group=group, owner_is_group=owner_is_group
-            )
+            folder = FolderCreateOrUpdate(path=path, group=group, owner_is_group=owner_is_group)
         elif owner_is_group is None:
             folder = FolderCreateOrUpdate(path=path, group=group, user=user)
         else:
-            folder = FolderCreateOrUpdate(
-                path=path, group=group, user=user, owner_is_group=owner_is_group
-            )
+            folder = FolderCreateOrUpdate(path=path, group=group, user=user, owner_is_group=owner_is_group)
         return self._send_post_request(
             "folders/create_folder/",
             folder.model_dump(exclude_unset=True, exclude_defaults=True, mode="json"),
@@ -247,9 +233,7 @@ class VASTClient(AbstractClient):
         """
         if isinstance(quota_id, int) and isinstance(new_size, int):
             body = QuotaUpdate(soft_limit=new_size, hard_limit=new_size)
-            return self._send_patch_request(
-                f"quotas/{quota_id!s}/", body.model_dump(mode="json")
-            )
+            return self._send_patch_request(f"quotas/{quota_id!s}/", body.model_dump(mode="json"))
         else:
             raise TypeError("quota_id and size must be of type int")
 
@@ -268,13 +252,9 @@ class VASTClient(AbstractClient):
     def get_protected_paths(self, source_dir: Path = None):
         if source_dir is None:
             return self._send_get_request("protectedpaths/")
-        return self._send_get_request(
-            "protectedpaths/", params={"source_dir": source_dir.as_posix()}
-        )
+        return self._send_get_request("protectedpaths/", params={"source_dir": source_dir.as_posix()})
 
-    def add_protected_path(
-        self, name: str, source_dir: Path, protection_policy_id: int, tenant_id: int
-    ):
+    def add_protected_path(self, name: str, source_dir: Path, protection_policy_id: int, tenant_id: int):
         """
         Add a protected path to the storage system
         :param name: name of the protected path
@@ -283,13 +263,9 @@ class VASTClient(AbstractClient):
         :param tenant_id: id of the tenant
         :return: message indicating success or failure
         """
-        protected_paths = self._send_get_request(
-            "protectedpaths/", params={"source_dir": source_dir.as_posix()}
-        )
+        protected_paths = self._send_get_request("protectedpaths/", params={"source_dir": source_dir.as_posix()})
         if source_dir.as_posix() in [i["source_dir"] for i in protected_paths]:
-            raise ResourceExistsError(
-                f"This path already exists as a protected path on {self.host}!"
-            )
+            raise ResourceExistsError(f"This path already exists as a protected path on {self.host}!")
         ppc = ProtectedPathCreate(
             name=name,
             source_dir=source_dir,
@@ -298,17 +274,13 @@ class VASTClient(AbstractClient):
         )
         return self._send_post_request("protectedpaths/", ppc.model_dump(mode="json"))
 
-    def get_protection_policies(
-        self, name: str = None, policy_id: int = None, source_dir: Path = None
-    ):
+    def get_protection_policies(self, name: str = None, policy_id: int = None, source_dir: Path = None):
         if id is not None:
             return self._send_get_request(f"protectionpolicies/{policy_id!s}/")
         if name is not None:
             return self._send_get_request("protectionpolicies/", params={"name": name})
         if source_dir is not None:
-            return self._send_get_request(
-                "protectionpolicies/", params={"source_dir": source_dir.as_posix()}
-            )
+            return self._send_get_request("protectionpolicies/", params={"source_dir": source_dir.as_posix()})
         return self._send_get_request("protectionpolicies/")
 
     def query_catalog(self, query_params: dict = None):
