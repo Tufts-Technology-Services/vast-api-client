@@ -400,7 +400,8 @@ class VASTClient:
         """
         Query the VAST Catalog, with GET bigcatalogconfig/query_data. The directories in /smb/gisusers/, say:
         vast.query_catalog({"parent_path": [{"eq": "/smb/gisusers/"}], "element_type": [{"eq": "DIR"}]})
-        A query can take a minute or more, so keep it out of a web request.
+        A query can take a minute or more, so keep it out of a web request. View permission on the logical
+        realm (view_logical, in VAST's read_only role) is enough: checked against the HPC VMS.
 
         VAST 5.3 returns every matching row in one response: 749,336 of them in about 80s on the HPC VMS.
         There's no paging (page is refused), and limit doesn't cut a result short: a limit below the number
