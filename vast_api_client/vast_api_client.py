@@ -32,7 +32,7 @@ from vast_api_client.models import (
     SourceDirQuery,
     ViewCreate,
 )
-from vast_api_client.transport import DEFAULT_RETRIES, DEFAULT_TIMEOUT, TimedVASTClient
+from vast_api_client.transport import CATALOG_TIMEOUT, DEFAULT_RETRIES, DEFAULT_TIMEOUT, TimedVASTClient
 
 logger = logging.getLogger(__name__)
 
@@ -118,13 +118,22 @@ class VASTClient:
     def __repr__(self):
         return f"VASTClient(host={self.host!r}, version={self.version!r})"
 
-    def _call(self, method: str, endpoint: str, *, query: dict = None, body: dict = None):
+    def _call(
+        self,
+        method: str,
+        endpoint: str,
+        *,
+        query: dict = None,
+        body: dict = None,
+        timeout: float | urllib3.Timeout | None = None,
+    ):
         """
         Send one request to the API. Every request the client makes goes through here.
         :param method: GET, POST, PATCH or DELETE
         :param endpoint: path below api/<version>/, without leading or trailing slashes: "quotas/5"
         :param query: query parameters, for GET and DELETE
         :param body: JSON body, for POST, PATCH and DELETE
+        :param timeout: this request's timeout, for an endpoint slower than the rest; the client's otherwise
         :return: the parsed JSON response, or None if the response has no body or one that isn't JSON
         :raises VastNotFoundError: the API answered 404
         :raises VastAPIError: the API answered with another non-2xx status
@@ -135,7 +144,7 @@ class VASTClient:
             raise ValueError(f"query parameters can't be sent with {method}")
         logger.debug(f"{method} {endpoint} query={query} body={body}")
         try:
-            result = self.api[endpoint].request(method, fields=query, data=body)
+            result = self.api.endpoint_client(endpoint, timeout).request(method, fields=query, data=body)
         except vastpy.RESTFailure as failure:
             error_class = VastNotFoundError if failure.status == 404 else VastAPIError
             raise error_class(
@@ -381,14 +390,20 @@ class VASTClient:
         filters: dict[str, list[dict[str, Any]]],
         fields: Sequence[str] = ("name",),
         path: str = "/",
+        timeout: float | urllib3.Timeout | None = CATALOG_TIMEOUT,
     ):
         """
         Query the VAST Catalog. The directories in /smb/gisusers/, say:
         vast.query_catalog({"parent_path": [{"eq": "/smb/gisusers/"}], "element_type": [{"eq": "DIR"}]})
+        A query can take a minute or more, so keep it out of a web request. The user needs create_logical:
+        VAST checks a POST against create permissions, though this one only reads.
         :param filters: catalog column to a list of {operator: value} conditions; VAST needs at least one
         :param fields: catalog columns to return
         :param path: where in the catalog to look
-        :return: catalog entries matching the query
+        :param timeout: seconds, or a urllib3.Timeout (default 10s to connect, 300s to read): longer than
+            the client's, because catalog queries are slow
+        :return: VAST's response: {"count", "next", "prop_list", "results"}, where results is one page of
+            rows, each a list of values in prop_list's column order
         """
         query = CatalogQuery(path=path, filters=filters, fields=fields)
-        return self._call("POST", "bigcatalogconfig/query_data", body=query.model_dump(mode="json"))
+        return self._call("POST", "bigcatalogconfig/query_data", body=query.model_dump(mode="json"), timeout=timeout)

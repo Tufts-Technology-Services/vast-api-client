@@ -517,3 +517,40 @@ def test_api_error_code(body, code):
 )
 def test_api_error_detail(body, detail):
     assert VastAPIError(status=503, method="GET", endpoint="quotas", body=body).detail == detail
+
+
+# per-call timeouts
+
+
+def test_query_catalog_has_a_longer_timeout(client, vms):
+    vms.reply_json({"count": 0, "next": None, "prop_list": ["name"], "results": []})
+
+    client.query_catalog({"parent_path": [{"eq": "/smb/gisusers/"}]})
+    client.get_quotas()
+
+    catalog_timeout, quotas_timeout = (settings["timeout"] for settings in vms.pool_settings)
+    assert (catalog_timeout.connect_timeout, catalog_timeout.read_timeout) == (10, 300)
+    assert (quotas_timeout.connect_timeout, quotas_timeout.read_timeout) == (10, 30)
+
+
+def test_query_catalog_timeout_can_be_set(client, vms):
+    client.query_catalog({"parent_path": [{"eq": "/smb/gisusers/"}]}, timeout=600)
+
+    assert vms.pool_settings[0]["timeout"] == 600
+
+
+def test_a_call_timeout_reaches_only_that_call(vms):
+    client = VASTClient(HOST, "alice", "secret", timeout=5)
+
+    client._call("GET", "quotas", timeout=60)
+    client._call("GET", "quotas")
+
+    assert [settings["timeout"] for settings in vms.pool_settings] == [60, 5]
+    assert vms.requests[0].url == vms.requests[1].url == f"https://{HOST}/api/v7/quotas/"
+
+
+def test_endpoint_client_keeps_the_url():
+    root = TimedVASTClient(address=HOST, user="alice", password="secret", version="v7")
+
+    assert root.endpoint_client("folders/stat_path", timeout=60)._url == root["folders/stat_path"]._url
+    assert root.endpoint_client("quotas")._timeout is root._timeout

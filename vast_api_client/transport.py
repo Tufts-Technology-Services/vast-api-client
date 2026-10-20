@@ -6,6 +6,8 @@ from urllib3.exceptions import InsecureRequestWarning
 
 # The old requests client gave up after 10-30s, depending on the method
 DEFAULT_TIMEOUT = urllib3.Timeout(connect=10, read=30)
+# Catalog queries took 14-67s on the HPC VMS (2026-10-20), whatever their filters or path
+CATALOG_TIMEOUT = urllib3.Timeout(connect=10, read=300)
 # One more try when the connection fails; none after a read timeout, which waiting again rarely fixes
 # and which would send a POST twice
 DEFAULT_RETRIES = urllib3.Retry(total=1, read=0)
@@ -28,6 +30,13 @@ class TimedVASTClient(vastpy.VASTClient):
         child = super().__getitem__(part)
         child._timeout = self._timeout
         child._retries = self._retries
+        return child
+
+    def endpoint_client(self, part, timeout=None):
+        """self[part], with a timeout of its own if one is given: for an endpoint slower than the rest"""
+        child = self[part]
+        if timeout is not None:
+            child._timeout = timeout
         return child
 
     # vastpy 0.3.22's VASTClient.request, but for the timeout and retries passed to PoolManager

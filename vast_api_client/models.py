@@ -58,8 +58,9 @@ class CloneTypeEnum(StrEnum):
 
 
 # Operators bigcatalogconfig/query_data accepts in a filter condition. eq and startswith are verified
-# against VAST 5.4.4 and 5.5 in the VAST KB; gt, ge and lt appear in its catalog examples, and le is
-# assumed alongside them. contains and gte are documented as rejected (400), so they are left out.
+# against VAST 5.4.4 and 5.5 in the VAST KB, and eq, ge and le against the HPC VMS (2026-10-20); gt
+# and lt appear in the KB's catalog examples. contains and gte are documented as rejected (400), so
+# they are left out.
 CatalogOperator = Literal["eq", "startswith", "gt", "ge", "lt", "le"]
 # a single {operator: value} pair
 CatalogCondition = Annotated[dict[CatalogOperator, Any], Field(min_length=1, max_length=1)]

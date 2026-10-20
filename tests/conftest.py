@@ -8,10 +8,12 @@ class RecordedCalls:
 
     def __init__(self):
         self.requests = []
+        self.timeouts = []
         self.responses = []
 
-    def __call__(self, method, endpoint, *, query=None, body=None):
+    def __call__(self, method, endpoint, *, query=None, body=None, timeout=None):
         self.requests.append((method, endpoint, query, body))
+        self.timeouts.append(timeout)
         return self.responses.pop(0) if self.responses else {}
 
 
