@@ -1,18 +1,18 @@
 import re
 from enum import UNIQUE, StrEnum, verify
 from pathlib import Path
-from typing import Annotated, Any
+from typing import Annotated, Any, Literal
 
 from pydantic import (
     AfterValidator,
     BaseModel,
     ConfigDict,
     Field,
+    NonNegativeInt,
     PlainSerializer,
     PositiveInt,
     field_serializer,
     field_validator,
-    model_serializer,
     model_validator,
 )
 
@@ -60,19 +60,19 @@ class CloneTypeEnum(StrEnum):
 # Operators bigcatalogconfig/query_data accepts in a filter condition. eq and startswith are verified
 # against VAST 5.4.4 and 5.5 in the VAST KB; gt, ge and lt appear in its catalog examples, and le is
 # assumed alongside them. contains and gte are documented as rejected (400), so they are left out.
-CATALOG_FILTER_OPERATORS = frozenset({"eq", "startswith", "gt", "ge", "lt", "le"})
+CatalogOperator = Literal["eq", "startswith", "gt", "ge", "lt", "le"]
+# a single {operator: value} pair
+CatalogCondition = Annotated[dict[CatalogOperator, Any], Field(min_length=1, max_length=1)]
+NonEmptyStr = Annotated[str, Field(min_length=1)]
 
 
-class QuotaCreate(BaseModel):
+class QuotaUpdate(BaseModel):
     model_config = ConfigDict(extra="forbid", str_strip_whitespace=True)
-    name: str
-    path: VastPath
     soft_limit: PositiveInt | None = None
     hard_limit: PositiveInt
-    create_dir: bool = False
 
     @model_validator(mode="after")
-    def soft_limit_below_hard_limit(self) -> "QuotaCreate":
+    def soft_limit_below_hard_limit(self) -> "QuotaUpdate":
         if self.soft_limit is None:
             self.soft_limit = self.hard_limit
         if self.hard_limit < self.soft_limit:
@@ -80,34 +80,22 @@ class QuotaCreate(BaseModel):
         return self
 
 
+class QuotaCreate(QuotaUpdate):
+    """a new quota: QuotaUpdate's limits, plus where it goes"""
+
+    name: str
+    path: VastPath
+    create_dir: bool = False
+
+
 class ACL(BaseModel):
     model_config = ConfigDict(extra="forbid", str_strip_whitespace=True, frozen=True)
     perm: ACLPerm
     grantee: ACLGrantee
-    sid_str: str
+    sid_str: NonEmptyStr
     # None for SMB-only groups, which have no POSIX gid; left out of the body rather than sent as null
-    uid_or_gid: int | None = None
+    uid_or_gid: NonNegativeInt | None = Field(default=None, exclude_if=lambda uid_or_gid: uid_or_gid is None)
     group_type: ProtocolEnum = ProtocolEnum.SMB
-
-    @field_validator("uid_or_gid")
-    @classmethod
-    def is_valid_uid_or_gid(cls, uid_or_gid: int | None) -> int | None:
-        if uid_or_gid is not None and uid_or_gid < 0:
-            raise ValueError("uid_or_gid must be non-negative")
-        return uid_or_gid
-
-    @model_validator(mode="after")
-    def all_fields_present(self) -> "ACL":
-        if not all([self.perm, self.grantee, self.sid_str]):
-            raise ValueError("perm, grantee and sid_str must be present and non-empty")
-        return self
-
-    @model_serializer(mode="wrap")
-    def omit_missing_uid_or_gid(self, handler):
-        data = handler(self)
-        if self.uid_or_gid is None:
-            data.pop("uid_or_gid", None)
-        return data
 
     def sort_key(self) -> tuple:
         return (
@@ -123,22 +111,13 @@ class ViewCreate(BaseModel):
     model_config = ConfigDict(extra="forbid", str_strip_whitespace=True, frozen=True)
     path: VastPath
     policy_id: int
-    # validate_default, so leaving protocols out fails like passing an empty set
-    protocols: frozenset[ProtocolEnum] = Field(default=frozenset(), validate_default=True)
+    protocols: frozenset[ProtocolEnum] = Field(min_length=1)
     create_dir: bool = True
 
     # sorted, so the same view always produces the same body
     @field_serializer("protocols")
     def serialize_protocols(self, protocols: frozenset[ProtocolEnum], _info):
         return sorted(protocol.value for protocol in protocols)
-
-    @field_validator("protocols")
-    @classmethod
-    def is_valid_protocols(cls, protocols: frozenset[ProtocolEnum]) -> frozenset[ProtocolEnum]:
-        if len(protocols) == 0:
-            raise ValueError("protocols must not be empty")
-        else:
-            return protocols
 
 
 class ShareCreate(ViewCreate):
@@ -174,11 +153,13 @@ class ShareCreate(ViewCreate):
 
 class ProtectionPolicyFrame(BaseModel):
     """
-    VAST names the fields with hyphens; build with underscores, dump with by_alias=True to send:
+    VAST names the fields with hyphens, and so does the dump; build it with underscores or hyphens:
     {'every': '1D', 'start-at': '2024-01-22 17:00:00', 'keep-local': '2M', 'keep-remote': '0s'}
     """
 
-    model_config = ConfigDict(extra="forbid", str_strip_whitespace=True, frozen=True, populate_by_name=True)
+    model_config = ConfigDict(
+        extra="forbid", str_strip_whitespace=True, frozen=True, populate_by_name=True, serialize_by_alias=True
+    )
     every: str
     start_at: str = Field(alias="start-at")
     keep_local: str = Field(alias="keep-local")
@@ -200,10 +181,6 @@ class ProtectionPolicyCreate(BaseModel):
     clone_type: CloneTypeEnum = CloneTypeEnum.LOCAL
     indestructible: bool = False
 
-    @field_serializer("frames")
-    def serialize_frames(self, frames: list[ProtectionPolicyFrame], _info):
-        return [frame.model_dump(mode="json", by_alias=True) for frame in frames]
-
 
 class ProtectedPathCreate(BaseModel):
     model_config = ConfigDict(extra="forbid", str_strip_whitespace=True, frozen=True)
@@ -215,8 +192,16 @@ class ProtectedPathCreate(BaseModel):
 
 
 class PathBody(BaseModel):
-    model_config = ConfigDict(extra="allow", str_strip_whitespace=True)
+    """a path, as a query or a body; dump with exclude_none=True, so a tenant_id of None is left out"""
+
+    model_config = ConfigDict(extra="forbid", str_strip_whitespace=True)
     path: VastPath
+    tenant_id: int | None = None
+
+
+class SourceDirQuery(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    source_dir: VastPath
 
 
 class FolderCreateOrUpdate(BaseModel):
@@ -225,20 +210,6 @@ class FolderCreateOrUpdate(BaseModel):
     owner_is_group: bool = False
     user: str | None = None
     group: str | None = None
-
-
-class QuotaUpdate(BaseModel):
-    model_config = ConfigDict(extra="forbid", str_strip_whitespace=True)
-    soft_limit: PositiveInt | None = None
-    hard_limit: PositiveInt
-
-    @model_validator(mode="after")
-    def soft_limit_below_hard_limit(self) -> "QuotaUpdate":
-        if self.soft_limit is None:
-            self.soft_limit = self.hard_limit
-        if self.hard_limit < self.soft_limit:
-            raise ValueError("'soft_limit' cannot be larger than 'hard_limit'")
-        return self
 
 
 class CatalogQuery(BaseModel):
@@ -251,8 +222,8 @@ class CatalogQuery(BaseModel):
     model_config = ConfigDict(extra="forbid", str_strip_whitespace=True, frozen=True)
     path: str = "/"
     # VAST rejects a query without a filter
-    filters: dict[str, list[dict[str, Any]]] = Field(min_length=1)
-    fields: list[str] = Field(default_factory=lambda: ["name"], min_length=1)
+    filters: dict[NonEmptyStr, Annotated[list[CatalogCondition], Field(min_length=1)]] = Field(min_length=1)
+    fields: list[NonEmptyStr] = Field(default_factory=lambda: ["name"], min_length=1)
 
     # validate_path rejects "/" and trailing slashes, both of which catalog queries use
     @field_validator("path")
@@ -265,27 +236,3 @@ class CatalogQuery(BaseModel):
         if any(char.isspace() or not char.isprintable() for char in path):
             raise ValueError("path must not contain whitespace or control characters")
         return path
-
-    @field_validator("filters")
-    @classmethod
-    def is_valid_filters(cls, filters: dict[str, list[dict[str, Any]]]) -> dict[str, list[dict[str, Any]]]:
-        for column, conditions in filters.items():
-            if not column:
-                raise ValueError("filter column names must not be empty")
-            if not conditions:
-                raise ValueError(f"filter on '{column}' has no conditions")
-            for condition in conditions:
-                if len(condition) != 1:
-                    raise ValueError(f"each condition on '{column}' must be a single {{operator: value}} pair")
-                operator = next(iter(condition))
-                if operator not in CATALOG_FILTER_OPERATORS:
-                    allowed = ", ".join(sorted(CATALOG_FILTER_OPERATORS))
-                    raise ValueError(f"unknown operator '{operator}' on '{column}'; expected one of {allowed}")
-        return filters
-
-    @field_validator("fields")
-    @classmethod
-    def is_valid_fields(cls, fields: list[str]) -> list[str]:
-        if not all(fields):
-            raise ValueError("field names must not be empty")
-        return fields

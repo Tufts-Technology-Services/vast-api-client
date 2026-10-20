@@ -3,7 +3,6 @@
 from pathlib import Path
 
 import pytest
-from pydantic import ValidationError
 
 from vast_api_client.models import (
     ACL,
@@ -30,9 +29,21 @@ def make_acl(**overrides):
     return ACL(**(fields | overrides))
 
 
+VIEW_FIELDS = {"path": Path("/cluster/lab"), "policy_id": 3, "protocols": [ProtocolEnum.NFS]}
+SHARE_FIELDS = {"share": "lab$", "path": Path("/smb/lab"), "policy_id": 5, "protocols": [ProtocolEnum.SMB]}
+
+
+def make_view(**overrides):
+    return ViewCreate(**(VIEW_FIELDS | overrides))
+
+
 def make_share(**overrides):
-    fields = {"share": "lab$", "path": Path("/smb/lab"), "policy_id": 5, "protocols": [ProtocolEnum.SMB]}
-    return ShareCreate(**(fields | overrides))
+    return ShareCreate(**(SHARE_FIELDS | overrides))
+
+
+def make_frame(**overrides):
+    fields = {"every": "1D", "start_at": "2024-01-22 17:00:00", "keep_local": "2M"}
+    return ProtectionPolicyFrame(**(fields | overrides))
 
 
 # validate_path
@@ -52,16 +63,11 @@ def test_validate_path_rejects(path):
 # ViewCreate and ShareCreate protocols
 
 
-@pytest.mark.parametrize("model", [ViewCreate, ShareCreate])
-def test_protocols_default_is_an_empty_frozenset(model):
-    assert model.model_fields["protocols"].default == frozenset()
-
-
 @pytest.mark.parametrize(
     "protocols", [[ProtocolEnum.NFS], {ProtocolEnum.NFS}, frozenset({ProtocolEnum.NFS}), (ProtocolEnum.NFS,)]
 )
 def test_view_accepts_protocols_as_any_collection(protocols):
-    view = ViewCreate(path=Path("/cluster/lab"), policy_id=3, protocols=protocols)
+    view = make_view(protocols=protocols)
 
     assert view.protocols == frozenset({ProtocolEnum.NFS})
     assert view.model_dump(mode="json")["protocols"] == ["NFS"]
@@ -77,24 +83,22 @@ def test_protocols_serialize_sorted(model):
     assert second.model_dump(mode="json") == first.model_dump(mode="json")
 
 
+@pytest.mark.parametrize("make_model", [make_view, make_share])
 @pytest.mark.parametrize("protocols", [[], set(), None])
-def test_view_needs_protocols(protocols):
+def test_protocols_are_required(make_model, protocols):
     with pytest.raises(ValueError):
-        ViewCreate(path=Path("/cluster/lab"), policy_id=3, protocols=protocols)
+        make_model(protocols=protocols)
 
 
-def test_view_needs_protocols_when_left_out():
+@pytest.mark.parametrize("model, fields", [(ViewCreate, VIEW_FIELDS), (ShareCreate, SHARE_FIELDS)])
+@pytest.mark.parametrize("left_out", ["protocols", "policy_id"])
+def test_protocols_and_policy_id_cannot_be_left_out(model, fields, left_out):
     with pytest.raises(ValueError):
-        ViewCreate(path=Path("/cluster/lab"), policy_id=3)
-
-
-def test_share_needs_protocols_when_left_out():
-    with pytest.raises(ValueError):
-        ShareCreate(share="lab$", path=Path("/smb/lab"), policy_id=5)
+        model(**{name: value for name, value in fields.items() if name != left_out})
 
 
 def test_view_body():
-    view = ViewCreate(path=Path("/cluster/lab"), policy_id=3, protocols={ProtocolEnum.NFS})
+    view = make_view()
 
     assert view.model_dump(mode="json") == {
         "path": "/cluster/lab",
@@ -107,24 +111,10 @@ def test_view_body():
 # policy_id
 
 
-def test_view_policy_id_is_required():
+@pytest.mark.parametrize("make_model", [make_view, make_share])
+def test_policy_id_cannot_be_none(make_model):
     with pytest.raises(ValueError):
-        ViewCreate(path=Path("/cluster/lab"), protocols=[ProtocolEnum.NFS])
-
-
-def test_share_policy_id_is_required():
-    with pytest.raises(ValueError):
-        ShareCreate(share="lab$", path=Path("/smb/lab"), protocols=[ProtocolEnum.SMB])
-
-
-def test_view_policy_id_cannot_be_none():
-    with pytest.raises(ValueError):
-        ViewCreate(path=Path("/cluster/lab"), policy_id=None, protocols=[ProtocolEnum.NFS])
-
-
-def test_share_policy_id_cannot_be_none():
-    with pytest.raises(ValueError):
-        make_share(policy_id=None)
+        make_model(policy_id=None)
 
 
 # ShareCreate
@@ -150,15 +140,6 @@ def test_share_create_dir_acls_can_be_empty(acls):
 
     assert share.create_dir_acls == frozenset()
     assert share.model_dump(mode="json")["create_dir_acls"] == []
-
-
-def test_share_create_dir_acls_default_is_not_shared():
-    first = make_share()
-    second = make_share(create_dir_acls=[make_acl()])
-
-    assert first.create_dir_acls == frozenset()
-    assert ShareCreate.model_fields["create_dir_acls"].default == frozenset()
-    assert len(second.create_dir_acls) == 1
 
 
 @pytest.mark.parametrize("container", [list, set, tuple])
@@ -214,22 +195,16 @@ def test_acl_body():
 
 
 def test_acl_without_a_gid_leaves_it_out():
-    acl = make_acl(uid_or_gid=None)
+    acl = ACL(perm=ACLPerm.FULL, grantee=ACLGrantee.GROUPS, sid_str="S-1-5-21-1")
 
+    assert acl.uid_or_gid is None
     assert acl.model_dump(mode="json") == {
         "perm": "FULL",
         "grantee": "groups",
         "sid_str": "S-1-5-21-1",
         "group_type": "SMB",
     }
-    assert "uid_or_gid" not in make_acl(uid_or_gid=None).model_dump()
-
-
-def test_acl_gid_defaults_to_none():
-    acl = ACL(perm=ACLPerm.READ, grantee=ACLGrantee.GROUPS, sid_str="S-1-5-21-1")
-
-    assert acl.uid_or_gid is None
-    assert "uid_or_gid" not in acl.model_dump(mode="json")
+    assert "uid_or_gid" not in acl.model_dump()
 
 
 def test_acl_keeps_gid_zero():
@@ -312,31 +287,21 @@ FRAME_BODY = {"every": "1D", "start-at": "2024-01-22 17:00:00", "keep-local": "2
 
 
 def test_frame_built_with_underscores_dumps_with_hyphens():
-    frame = ProtectionPolicyFrame(every="1D", start_at="2024-01-22 17:00:00", keep_local="2M")
-
-    assert frame.model_dump(mode="json", by_alias=True) == FRAME_BODY
-    assert frame.model_dump() == {
-        "every": "1D",
-        "start_at": "2024-01-22 17:00:00",
-        "keep_local": "2M",
-        "keep_remote": "0s",
-    }
+    assert make_frame().model_dump(mode="json") == FRAME_BODY
+    assert make_frame().model_dump() == FRAME_BODY
 
 
 def test_frame_built_from_vast_keys():
-    assert ProtectionPolicyFrame(**FRAME_BODY) == ProtectionPolicyFrame(
-        every="1D", start_at="2024-01-22 17:00:00", keep_local="2M"
-    )
+    assert ProtectionPolicyFrame(**FRAME_BODY) == make_frame()
 
 
 def test_frame_rejects_an_unknown_every():
     with pytest.raises(ValueError):
-        ProtectionPolicyFrame(every="2D", start_at="2024-01-22 17:00:00", keep_local="2M")
+        make_frame(every="2D")
 
 
 def test_protection_policy_body_uses_hyphenated_frame_keys():
-    frame = ProtectionPolicyFrame(every="1D", start_at="2024-01-22 17:00:00", keep_local="2M")
-    policy = ProtectionPolicyCreate(name="daily", frames=[frame], prefix="daily")
+    policy = ProtectionPolicyCreate(name="daily", frames=[make_frame()], prefix="daily")
 
     assert policy.model_dump(mode="json") == {
         "name": "daily",
@@ -348,7 +313,7 @@ def test_protection_policy_body_uses_hyphenated_frame_keys():
 
 
 def test_protection_policy_clone_type():
-    frame = ProtectionPolicyFrame(every="1D", start_at="2024-01-22 17:00:00", keep_local="2M")
+    frame = make_frame()
 
     remote = ProtectionPolicyCreate(name="daily", frames=[frame], prefix="daily", clone_type="REMOTE")
     assert remote.clone_type is CloneTypeEnum.REMOTE
@@ -360,36 +325,32 @@ def test_protection_policy_clone_type():
 # QuotaCreate and QuotaUpdate
 
 
-@pytest.mark.parametrize("model", [QuotaCreate, QuotaUpdate])
-def test_quota_soft_limit_defaults_to_hard_limit(model):
-    kwargs = {"name": "lab", "path": Path("/rstore/lab")} if model is QuotaCreate else {}
-
-    assert model(**kwargs, hard_limit=1000).soft_limit == 1000
+# each quota model, with the fields it needs besides its limits
+QUOTA_MODELS = [(QuotaCreate, {"name": "lab", "path": Path("/rstore/lab")}), (QuotaUpdate, {})]
 
 
-@pytest.mark.parametrize("model", [QuotaCreate, QuotaUpdate])
-def test_quota_soft_limit_at_or_below_hard_limit(model):
-    kwargs = {"name": "lab", "path": Path("/rstore/lab")} if model is QuotaCreate else {}
-
-    assert model(**kwargs, hard_limit=1000, soft_limit=1000).soft_limit == 1000
-    assert model(**kwargs, hard_limit=1000, soft_limit=500).soft_limit == 500
+@pytest.mark.parametrize("model, base", QUOTA_MODELS)
+def test_quota_soft_limit_defaults_to_hard_limit(model, base):
+    assert model(**base, hard_limit=1000).soft_limit == 1000
 
 
-@pytest.mark.parametrize("model", [QuotaCreate, QuotaUpdate])
-def test_quota_soft_limit_above_hard_limit(model):
-    kwargs = {"name": "lab", "path": Path("/rstore/lab")} if model is QuotaCreate else {}
+@pytest.mark.parametrize("model, base", QUOTA_MODELS)
+def test_quota_soft_limit_at_or_below_hard_limit(model, base):
+    assert model(**base, hard_limit=1000, soft_limit=1000).soft_limit == 1000
+    assert model(**base, hard_limit=1000, soft_limit=500).soft_limit == 500
 
+
+@pytest.mark.parametrize("model, base", QUOTA_MODELS)
+def test_quota_soft_limit_above_hard_limit(model, base):
     with pytest.raises(ValueError):
-        model(**kwargs, hard_limit=1000, soft_limit=2000)
+        model(**base, hard_limit=1000, soft_limit=2000)
 
 
-@pytest.mark.parametrize("model", [QuotaCreate, QuotaUpdate])
+@pytest.mark.parametrize("model, base", QUOTA_MODELS)
 @pytest.mark.parametrize("limits", [{"hard_limit": 0}, {"hard_limit": -1}, {"hard_limit": 1000, "soft_limit": 0}])
-def test_quota_limits_must_be_positive(model, limits):
-    kwargs = {"name": "lab", "path": Path("/rstore/lab")} if model is QuotaCreate else {}
-
+def test_quota_limits_must_be_positive(model, base, limits):
     with pytest.raises(ValueError):
-        model(**kwargs, **limits)
+        model(**base, **limits)
 
 
 def test_quota_needs_a_hard_limit():
@@ -414,12 +375,6 @@ def test_quota_create_body():
 GISUSERS_FILTERS = {"parent_path": [{"eq": "/smb/gisusers/"}], "element_type": [{"eq": "DIR"}]}
 
 
-def test_catalog_query_body():
-    query = CatalogQuery(filters=GISUSERS_FILTERS, fields=["name"])
-
-    assert query.model_dump(mode="json") == {"path": "/", "filters": GISUSERS_FILTERS, "fields": ["name"]}
-
-
 def test_catalog_query_defaults():
     query = CatalogQuery(filters=GISUSERS_FILTERS)
 
@@ -437,6 +392,9 @@ def test_catalog_query_defaults_are_not_shared():
 def test_catalog_query_needs_a_filter(filters):
     with pytest.raises(ValueError):
         CatalogQuery(filters=filters)
+
+
+def test_catalog_query_filters_cannot_be_left_out():
     with pytest.raises(ValueError):
         CatalogQuery()
 
@@ -489,7 +447,7 @@ def test_catalog_query_rejects_malformed_filters(filters):
         CatalogQuery(filters=filters)
 
 
-@pytest.mark.parametrize("fields", [[], [""], None])
+@pytest.mark.parametrize("fields", [[], [""], None, "name"])
 def test_catalog_query_rejects_fields(fields):
     with pytest.raises(ValueError):
         CatalogQuery(filters=GISUSERS_FILTERS, fields=fields)
@@ -498,8 +456,3 @@ def test_catalog_query_rejects_fields(fields):
 def test_catalog_query_rejects_unknown_keys():
     with pytest.raises(ValueError):
         CatalogQuery(filters=GISUSERS_FILTERS, page_size=100)
-
-
-def test_validation_errors_are_value_errors():
-    with pytest.raises(ValidationError):
-        CatalogQuery(path="relative", filters=GISUSERS_FILTERS)

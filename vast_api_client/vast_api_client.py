@@ -29,6 +29,7 @@ from vast_api_client.models import (
     QuotaCreate,
     QuotaUpdate,
     ShareCreate,
+    SourceDirQuery,
     ViewCreate,
 )
 from vast_api_client.transport import DEFAULT_RETRIES, DEFAULT_TIMEOUT, TimedVASTClient
@@ -160,13 +161,13 @@ class VASTClient:
         :return: list of quotas
         """
         if path is not None:
-            query = PathBody(path=path).model_dump(mode="json")
+            query = PathBody(path=path).model_dump(mode="json", exclude_none=True)
             return self._call("GET", "quotas", query=query)
         return self._call("GET", "quotas")
 
     def get_views(self, path: Path = None):
         if path is not None:
-            query = PathBody(path=path).model_dump(mode="json")
+            query = PathBody(path=path).model_dump(mode="json", exclude_none=True)
             return self._call("GET", "views", query=query)
         return self._call("GET", "views")
 
@@ -194,17 +195,15 @@ class VASTClient:
     ):
         """
         Add a view to the storage system
-        :param name: name of the view
         :param path: path of the view
         :param protocols: set of protocols to be used with the view
         :param policy_id: policy to use with the view. create a new enum value if needed
         :param share_name: name of the share to be used with the view. must end with '$' if specified
         :param acls: set of ACLs to be used with the view.
         :param dry_run: if True, will not actually create the view
-        :return: message indicating success or failure
+        :return: the API's response, or None on a dry run; a failure raises
         """
         # --gid-inheritance linux|bsd ; default is linux, but we should select bsd. new files inherit the gid of the parent directory
-        vc = None
         if share_name is None:
             vc = ViewCreate(path=path, protocols=protocols, policy_id=policy_id)
         else:
@@ -236,7 +235,7 @@ class VASTClient:
         :param hard_limit: hard limit of the quota in bytes
         :param soft_limit: soft limit of the quota in bytes
         :param dry_run: if True, will not actually create the quota
-        :return: message indicating success or failure
+        :return: the API's response, or None on a dry run; a failure raises
         """
         name = name.removesuffix("$")
         qc = QuotaCreate(name=name, path=path, soft_limit=soft_limit, hard_limit=hard_limit)
@@ -273,9 +272,7 @@ class VASTClient:
         DELETE /folders/delete_folder/
         :return: {"status": "deleted"}; a failure raises
         """
-        body = PathBody(path=path).model_dump(mode="json")
-        if tenant_id is not None:
-            body["tenant_id"] = tenant_id
+        body = PathBody(path=path, tenant_id=tenant_id).model_dump(mode="json", exclude_none=True)
         self._call("DELETE", "folders/delete_folder", body=body)
         return {"status": "deleted"}
 
@@ -292,16 +289,14 @@ class VASTClient:
             "children": 0
         }
         """
-        body = PathBody(path=path).model_dump(mode="json")
-        if tenant_id is not None:
-            body["tenant_id"] = tenant_id
+        body = PathBody(path=path, tenant_id=tenant_id).model_dump(mode="json", exclude_none=True)
         return self._call("POST", "folders/stat_path", body=body)
 
     def update_quota_size(self, quota_id: int, new_size: int):
         """
         :param quota_id: int
         :param new_size: int in bytes
-        :return: message indicating success or failure
+        :return: the API's response; a failure raises
         """
         if isinstance(quota_id, int) and isinstance(new_size, int):
             body = QuotaUpdate(soft_limit=new_size, hard_limit=new_size)
@@ -328,7 +323,8 @@ class VASTClient:
     def get_protected_paths(self, source_dir: Path = None):
         if source_dir is None:
             return self._call("GET", "protectedpaths")
-        return self._call("GET", "protectedpaths", query={"source_dir": source_dir.as_posix()})
+        query = SourceDirQuery(source_dir=source_dir).model_dump(mode="json")
+        return self._call("GET", "protectedpaths", query=query)
 
     def add_protected_path(self, name: str, source_dir: Path, protection_policy_id: int, tenant_id: int):
         """
@@ -337,18 +333,19 @@ class VASTClient:
         :param source_dir: source directory of the protected path
         :param protection_policy_id: id of the protection policy to use
         :param tenant_id: id of the tenant
-        :return: message indicating success or failure
+        :return: the API's response; a failure raises
         """
-        protected_paths = self.get_protected_paths(source_dir)
-        if source_dir.as_posix() in [i["source_dir"] for i in protected_paths]:
-            raise ResourceExistsError(f"This path already exists as a protected path on {self.host}!")
         ppc = ProtectedPathCreate(
             name=name,
             source_dir=source_dir,
             protection_policy_id=protection_policy_id,
             tenant_id=tenant_id,
         )
-        return self._call("POST", "protectedpaths", body=ppc.model_dump(mode="json"))
+        body = ppc.model_dump(mode="json")
+        protected_paths = self.get_protected_paths(ppc.source_dir)
+        if body["source_dir"] in [i["source_dir"] for i in protected_paths]:
+            raise ResourceExistsError(f"This path already exists as a protected path on {self.host}!")
+        return self._call("POST", "protectedpaths", body=body)
 
     def get_protection_policies(self, name: str = None, policy_id: int = None, source_dir: Path = None):
         if policy_id is not None:
@@ -356,7 +353,8 @@ class VASTClient:
         if name is not None:
             return self._call("GET", "protectionpolicies", query={"name": name})
         if source_dir is not None:
-            return self._call("GET", "protectionpolicies", query={"source_dir": source_dir.as_posix()})
+            query = SourceDirQuery(source_dir=source_dir).model_dump(mode="json")
+            return self._call("GET", "protectionpolicies", query=query)
         return self._call("GET", "protectionpolicies")
 
     def query_catalog(
@@ -373,8 +371,5 @@ class VASTClient:
         :param path: where in the catalog to look
         :return: catalog entries matching the query
         """
-        if isinstance(fields, str):
-            # list() would split it into one-letter column names
-            raise TypeError("fields must be a sequence of column names, not a string")
-        query = CatalogQuery(path=path, filters=filters, fields=list(fields))
+        query = CatalogQuery(path=path, filters=filters, fields=fields)
         return self._call("POST", "bigcatalogconfig/query_data", body=query.model_dump(mode="json"))

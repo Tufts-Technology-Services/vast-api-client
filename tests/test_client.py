@@ -350,6 +350,21 @@ def test_query_catalog_rejects_bad_filters(vast, api_calls, filters):
 
 
 def test_query_catalog_refuses_fields_as_a_string(vast, api_calls):
-    with pytest.raises(TypeError):
+    with pytest.raises(ValueError):
         vast.query_catalog({"name": [{"eq": "report"}]}, fields="size")
+    assert api_calls.requests == []
+
+
+@pytest.mark.parametrize(
+    "call",
+    [
+        lambda vast: vast.get_protected_paths(source_dir=Path("/rstore/lab.old")),
+        lambda vast: vast.get_protection_policies(source_dir=Path("/rstore/lab.old")),
+        lambda vast: vast.add_protected_path("lab", Path("/rstore/lab.old"), protection_policy_id=6, tenant_id=1),
+        lambda vast: vast.get_folder(Path("/homedir/jdoe01"), tenant_id="one"),
+    ],
+)
+def test_bad_paths_and_tenants_are_refused_before_sending(vast, api_calls, call):
+    with pytest.raises(ValueError):
+        call(vast)
     assert api_calls.requests == []

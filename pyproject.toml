@@ -13,7 +13,8 @@ requires-python = ">=3.11"
 dependencies = [
     # CA bundle for verifying the VMS certificate when no ca_file is given
     "certifi>=2024.2.2",
-    "pydantic>=2.9.1",
+    # exclude_if and serialize_by_alias, in models.py
+    "pydantic>=2.12",
     # urllib3 is vastpy's transport; we import it directly to map its exceptions
     "urllib3>=1.26",
     # 0.3.22 fixes the Api-Token auth header and adds the version parameter. Capped because

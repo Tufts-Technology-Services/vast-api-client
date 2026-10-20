@@ -21,6 +21,7 @@ from vast_api_client.models import (
     QuotaCreate,
     QuotaUpdate,
     ShareCreate,
+    SourceDirQuery,
     ViewCreate,
     validate_path,
 )
@@ -42,6 +43,7 @@ __all__ = [
     "QuotaUpdate",
     "ResourceExistsError",
     "ShareCreate",
+    "SourceDirQuery",
     "VASTClient",
     "VastAPIError",
     "VastConnectionError",
