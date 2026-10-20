@@ -1,3 +1,4 @@
+import logging
 from pathlib import Path
 from urllib.parse import urljoin
 
@@ -16,6 +17,8 @@ from vast_api_client.models import (
     ViewCreate,
 )
 from vast_api_client.utils import ResourceExistsError
+
+logger = logging.getLogger(__name__)
 
 
 class VASTClient(AbstractClient):
@@ -69,6 +72,26 @@ class VASTClient(AbstractClient):
         self.token = r["access"]
         self.refresh_token = r["refresh"]
 
+    def _call(self, method: str, endpoint: str, *, query: dict = None, body: dict = None):
+        """
+        Send one request to the API. Every request the client makes goes through here.
+        :param method: GET, POST, PATCH or DELETE
+        :param endpoint: path below api/<version>/, without leading or trailing slashes: "quotas/5"
+        :param query: query parameters, for GET
+        :param body: JSON body, for POST, PATCH and DELETE
+        :return: the parsed JSON response
+        """
+        path = f"{endpoint}/"
+        if method == "GET":
+            return self._send_get_request(path, params=query)
+        if method == "POST":
+            return self._send_post_request(path, body)
+        if method == "PATCH":
+            return self._send_patch_request(path, body)
+        if method == "DELETE":
+            return self._send_delete_request(path, body)
+        raise ValueError(f"Unsupported HTTP method: {method}")
+
     def get_quotas(self, path: Path = None):
         """
         Get all quotas or quotas for a specific path
@@ -76,16 +99,15 @@ class VASTClient(AbstractClient):
         :return: list of quotas
         """
         if path is not None:
-            body = PathBody(path=path).model_dump(mode="json")
-            return self._send_get_request("quotas/", params=body)
-        else:
-            return self._send_get_request("quotas/")
+            query = PathBody(path=path).model_dump(mode="json")
+            return self._call("GET", "quotas", query=query)
+        return self._call("GET", "quotas")
 
     def get_views(self, path: Path = None):
         if path is not None:
-            body = PathBody(path=path).model_dump(mode="json")
-            return self._send_get_request("views/", params=body)
-        return self._send_get_request("views/")
+            query = PathBody(path=path).model_dump(mode="json")
+            return self._call("GET", "views", query=query)
+        return self._call("GET", "views")
 
     @staticmethod
     def create_acl_from_str(perm: str, grantee: str, sid_str: str, uid_or_gid: int) -> ACL:
@@ -132,13 +154,11 @@ class VASTClient(AbstractClient):
                 policy_id=policy_id,
                 create_dir_acls=acls,
             )
-        print(f"creating view {vc}")
-        if not dry_run:
-            return self._send_post_request("views/", vc.model_dump(mode="json"))
-
-        print("skipping creation for dry run!")
-        print(vc.model_dump(mode="json"))
-        return None
+        if dry_run:
+            logger.info(f"dry run, not creating view: {vc.model_dump(mode='json')}")
+            return None
+        logger.info(f"creating view {vc}")
+        return self._call("POST", "views", body=vc.model_dump(mode="json"))
 
     def add_quota(
         self,
@@ -159,12 +179,11 @@ class VASTClient(AbstractClient):
         """
         name = name.removesuffix("$")
         qc = QuotaCreate(name=name, path=path, soft_limit=soft_limit, hard_limit=hard_limit)
-        print(f"creating quota {qc}")
         if dry_run:
-            print("skipping creation for dry run!")
-            print(qc.model_dump(mode="json"))
-        else:
-            return self._send_post_request("quotas/", qc.model_dump(mode="json"))
+            logger.info(f"dry run, not creating quota: {qc.model_dump(mode='json')}")
+            return None
+        logger.info(f"creating quota {qc}")
+        return self._call("POST", "quotas", body=qc.model_dump(mode="json"))
 
     def add_folder(self, path: Path, group: str, user: str = None):
         """
@@ -175,7 +194,7 @@ class VASTClient(AbstractClient):
         """
         owner_is_group = group == user
         folder = FolderCreateOrUpdate(path=path, owner_is_group=owner_is_group, user=user, group=group)
-        return self._send_post_request("folders/create_folder/", folder.model_dump(mode="json"))
+        return self._call("POST", "folders/create_folder", body=folder.model_dump(mode="json"))
 
     def modify_folder(self, path: Path, group: str, user: str = None):
         """
@@ -193,9 +212,10 @@ class VASTClient(AbstractClient):
             folder = FolderCreateOrUpdate(path=path, group=group, user=user)
         else:
             folder = FolderCreateOrUpdate(path=path, group=group, user=user, owner_is_group=owner_is_group)
-        return self._send_post_request(
-            "folders/create_folder/",
-            folder.model_dump(exclude_unset=True, exclude_defaults=True, mode="json"),
+        return self._call(
+            "POST",
+            "folders/create_folder",
+            body=folder.model_dump(exclude_unset=True, exclude_defaults=True, mode="json"),
         )
 
     def delete_folder(self, path: Path, tenant_id: int = None):
@@ -205,7 +225,7 @@ class VASTClient(AbstractClient):
         body = PathBody(path=path).model_dump(mode="json")
         if tenant_id is not None:
             body["tenant_id"] = tenant_id
-        return self._send_delete_request("folders/delete_folder/", body)
+        return self._call("DELETE", "folders/delete_folder", body=body)
 
     def get_folder(self, path: Path, tenant_id: int = None):
         """
@@ -223,7 +243,7 @@ class VASTClient(AbstractClient):
         body = PathBody(path=path).model_dump(mode="json")
         if tenant_id is not None:
             body["tenant_id"] = tenant_id
-        return self._send_post_request("folders/stat_path/", body)
+        return self._call("POST", "folders/stat_path", body=body)
 
     def update_quota_size(self, quota_id: int, new_size: int):
         """
@@ -233,13 +253,13 @@ class VASTClient(AbstractClient):
         """
         if isinstance(quota_id, int) and isinstance(new_size, int):
             body = QuotaUpdate(soft_limit=new_size, hard_limit=new_size)
-            return self._send_patch_request(f"quotas/{quota_id!s}/", body.model_dump(mode="json"))
+            return self._call("PATCH", f"quotas/{quota_id}", body=body.model_dump(mode="json"))
         else:
             raise TypeError("quota_id and size must be of type int")
 
     def delete_quota(self, quota_id: int):
         if isinstance(quota_id, int):
-            return self._send_delete_request(f"quotas/{quota_id!s}/")
+            return self._call("DELETE", f"quotas/{quota_id}")
         else:
             raise TypeError("quota_id must be of type int")
 
@@ -247,12 +267,12 @@ class VASTClient(AbstractClient):
         """
         :return:
         """
-        return self._send_get_request("capacity/")
+        return self._call("GET", "capacity")
 
     def get_protected_paths(self, source_dir: Path = None):
         if source_dir is None:
-            return self._send_get_request("protectedpaths/")
-        return self._send_get_request("protectedpaths/", params={"source_dir": source_dir.as_posix()})
+            return self._call("GET", "protectedpaths")
+        return self._call("GET", "protectedpaths", query={"source_dir": source_dir.as_posix()})
 
     def add_protected_path(self, name: str, source_dir: Path, protection_policy_id: int, tenant_id: int):
         """
@@ -263,7 +283,7 @@ class VASTClient(AbstractClient):
         :param tenant_id: id of the tenant
         :return: message indicating success or failure
         """
-        protected_paths = self._send_get_request("protectedpaths/", params={"source_dir": source_dir.as_posix()})
+        protected_paths = self.get_protected_paths(source_dir)
         if source_dir.as_posix() in [i["source_dir"] for i in protected_paths]:
             raise ResourceExistsError(f"This path already exists as a protected path on {self.host}!")
         ppc = ProtectedPathCreate(
@@ -272,16 +292,16 @@ class VASTClient(AbstractClient):
             protection_policy_id=protection_policy_id,
             tenant_id=tenant_id,
         )
-        return self._send_post_request("protectedpaths/", ppc.model_dump(mode="json"))
+        return self._call("POST", "protectedpaths", body=ppc.model_dump(mode="json"))
 
     def get_protection_policies(self, name: str = None, policy_id: int = None, source_dir: Path = None):
-        if id is not None:
-            return self._send_get_request(f"protectionpolicies/{policy_id!s}/")
+        if policy_id is not None:
+            return self._call("GET", f"protectionpolicies/{policy_id}")
         if name is not None:
-            return self._send_get_request("protectionpolicies/", params={"name": name})
+            return self._call("GET", "protectionpolicies", query={"name": name})
         if source_dir is not None:
-            return self._send_get_request("protectionpolicies/", params={"source_dir": source_dir.as_posix()})
-        return self._send_get_request("protectionpolicies/")
+            return self._call("GET", "protectionpolicies", query={"source_dir": source_dir.as_posix()})
+        return self._call("GET", "protectionpolicies")
 
     def query_catalog(self, query_params: dict = None):
         """
@@ -297,4 +317,4 @@ class VASTClient(AbstractClient):
             },
             "fields": ["name"],
         }
-        return self._send_post_request("bigcatalogconfig/query_data/", payload=payload)
+        return self._call("POST", "bigcatalogconfig/query_data", body=payload)
