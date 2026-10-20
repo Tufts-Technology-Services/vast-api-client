@@ -1,18 +1,51 @@
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
 [project]
 name = "vast-api-client"
-version = "0.3.0"
+version = "0.4.0"
 description = "code to abstract working with vast data platform api"
 authors = [{name="Chris Barnett", email="Christopher.Barnett@tufts.edu"}]
+readme = "README.md"
+# StrEnum and enum.verify, in models.py, are 3.11+
+requires-python = ">=3.11"
 dependencies = [
-    "requests>=2.31.0",
-    "pydantic>=2.9.1",
-    "pytest>=8.3.1"
+    # CA bundle for verifying the VMS certificate when no ca_file is given
+    "certifi>=2024.2.2",
+    # exclude_if and serialize_by_alias, in models.py
+    "pydantic>=2.12",
+    # urllib3 is vastpy's transport; we import it directly to map its exceptions
+    "urllib3>=1.26",
+    # 0.3.22 fixes the Api-Token auth header and adds the version parameter. Capped because
+    # transport.TimedVASTClient copies 0.3.22's request(): a new vastpy has to be checked against it.
+    "vastpy>=0.3.22,<0.4",
 ]
-requires-python = ">= 3.6"
 
-[build-system]
-requires = [
-    "setuptools >= 59.0",
+[project.urls]
+"Source Code" = "https://github.com/Tufts-Technology-Services/vast-api-client"
+
+[dependency-groups]
+dev = [
+    "pytest>=8.3.1",
+    "ruff>=0.11.4",
 ]
-build-backend = "setuptools.build_meta"
 
+[tool.hatch.build.targets.wheel]
+packages = ["vast_api_client"]
+
+[tool.ruff]
+line-length = 120
+indent-width = 4
+target-version = "py311"
+
+[tool.ruff.lint]
+select = ["E4", "E7", "E9", "F", "I", "S308"]
+
+[tool.ruff.format]
+indent-style = "space"
+docstring-code-format = true
+
+[tool.pytest.ini_options]
+python_files = ["test_*.py"]
+testpaths = ["tests"]

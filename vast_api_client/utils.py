@@ -1,5 +1,5 @@
-class ResourceExistsError(ValueError):
-    pass
+# ResourceExistsError lives in exceptions.py; still importable from here for existing callers
+from vast_api_client.exceptions import ResourceExistsError as ResourceExistsError
 
 
 def gib_to_bytes(gb: int) -> int:

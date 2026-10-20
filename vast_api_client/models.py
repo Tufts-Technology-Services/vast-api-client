@@ -1,14 +1,26 @@
-from pathlib import Path
-from typing import Set, Optional
-from enum import StrEnum, verify, UNIQUE
+import json
 import re
-from pydantic import (BaseModel, ConfigDict, Field, PositiveInt, field_validator,
-                      model_validator, field_serializer, InstanceOf)
+from enum import UNIQUE, StrEnum, verify
+from pathlib import Path
+from typing import Annotated, Any, Literal
+
+from pydantic import (
+    AfterValidator,
+    BaseModel,
+    ConfigDict,
+    Field,
+    NonNegativeInt,
+    PlainSerializer,
+    PositiveInt,
+    field_serializer,
+    field_validator,
+    model_validator,
+)
 
 
 def validate_path(path: Path):
     # Regular expression pattern for Unix paths
-    pattern = r'^/([A-Za-z0-9_-]+/)*[A-Za-z0-9_-]+$'
+    pattern = r"^/([A-Za-z0-9_-]+/)*[A-Za-z0-9_-]+$"
 
     # Use re.match to check if the path matches the pattern
     if re.match(pattern, path.as_posix()):
@@ -17,50 +29,52 @@ def validate_path(path: Path):
         raise ValueError("invalid path")
 
 
+# a path checked by validate_path and sent as a POSIX string
+VastPath = Annotated[Path, AfterValidator(validate_path), PlainSerializer(Path.as_posix)]
+
+
 @verify(UNIQUE)
 class ProtocolEnum(StrEnum):
-    SMB = 'SMB'
-    NFS = 'NFS'
+    SMB = "SMB"
+    NFS = "NFS"
 
 
 @verify(UNIQUE)
 class ACLPerm(StrEnum):
-    READ = 'READ'
-    CHANGE = 'CHANGE'
-    FULL = 'FULL'
+    READ = "READ"
+    CHANGE = "CHANGE"
+    FULL = "FULL"
 
 
 @verify(UNIQUE)
 class ACLGrantee(StrEnum):
-    USERS = 'users'
-    GROUPS = 'groups'
-    
+    USERS = "users"
+    GROUPS = "groups"
+
 
 @verify(UNIQUE)
 class CloneTypeEnum(StrEnum):
-    LOCAL = 'LOCAL'
-    REMOTE = 'REMOTE'
+    LOCAL = "LOCAL"
+    REMOTE = "REMOTE"
 
 
-class QuotaCreate(BaseModel):
-    model_config = ConfigDict(extra='forbid', str_strip_whitespace=True)
-    name: str
-    path: Path
-    soft_limit: Optional[PositiveInt] = None
+# Operators bigcatalogconfig/query_data accepts in a filter condition. eq and startswith are verified
+# against VAST 5.4.4 and 5.5 in the VAST KB, and eq, ge and le against the HPC VMS (2026-10-20); gt
+# and lt appear in the KB's catalog examples. contains and gte are documented as rejected (400), so
+# they are left out.
+CatalogOperator = Literal["eq", "startswith", "gt", "ge", "lt", "le"]
+# {operator: value, ...}: the operators in one condition are AND'ed, as in a range {"ge": 1, "lt": 10}
+CatalogCondition = Annotated[dict[CatalogOperator, Any], Field(min_length=1)]
+NonEmptyStr = Annotated[str, Field(min_length=1)]
+
+
+class QuotaUpdate(BaseModel):
+    model_config = ConfigDict(extra="forbid", str_strip_whitespace=True)
+    soft_limit: PositiveInt | None = None
     hard_limit: PositiveInt
-    create_dir: bool = False
-
-    @field_serializer('path')
-    def serialize_path(self, path: Path, _info):
-        return path.as_posix()
-
-    @field_validator("path")
-    @classmethod
-    def is_valid_unix_path(cls, path: Path) -> Path:
-        return validate_path(path)
 
     @model_validator(mode="after")
-    def soft_limit_below_hard_limit(self) -> 'QuotaCreate':
+    def soft_limit_below_hard_limit(self) -> "QuotaUpdate":
         if self.soft_limit is None:
             self.soft_limit = self.hard_limit
         if self.hard_limit < self.soft_limit:
@@ -68,260 +82,172 @@ class QuotaCreate(BaseModel):
         return self
 
 
+class QuotaCreate(QuotaUpdate):
+    """a new quota: QuotaUpdate's limits, plus where it goes"""
+
+    name: str
+    path: VastPath
+    create_dir: bool = False
+
+
 class ACL(BaseModel):
-    model_config = ConfigDict(extra='forbid', str_strip_whitespace=True, frozen=True)
+    model_config = ConfigDict(extra="forbid", str_strip_whitespace=True, frozen=True)
     perm: ACLPerm
     grantee: ACLGrantee
-    sid_str: str
-    uid_or_gid: int
+    sid_str: NonEmptyStr
+    # None for SMB-only groups, which have no POSIX gid; left out of the body rather than sent as null
+    uid_or_gid: NonNegativeInt | None = Field(default=None, exclude_if=lambda uid_or_gid: uid_or_gid is None)
     group_type: ProtocolEnum = ProtocolEnum.SMB
 
-    @field_serializer('perm')
-    def serialize_perm(self, perm: ACLPerm, _info):
-        return perm.value
-    
-    @field_serializer('grantee')
-    def serialize_grantee(self, grantee: ACLGrantee, _info):
-        return grantee.value
-    
-    @field_serializer('group_type')
-    def serialize_group_type(self, group_type: ProtocolEnum, _info):
-        return group_type.value
-
-    @field_validator("uid_or_gid")
-    @classmethod
-    def is_valid_uid_or_gid(cls, uid_or_gid: int) -> int:
-        if uid_or_gid < 0:
-            raise ValueError("uid_or_gid must be non-negative")
-        return uid_or_gid
-
-    @model_validator(mode="after")
-    def all_fields_present(self) -> 'ACL':
-        if not all([self.perm, self.grantee, self.sid_str, self.uid_or_gid is not None]):
-            raise ValueError("All fields must be present and non-empty")
-        return self
+    def sort_key(self) -> tuple:
+        return (
+            self.grantee,
+            self.sid_str,
+            self.perm,
+            self.group_type,
+            -1 if self.uid_or_gid is None else self.uid_or_gid,
+        )
 
 
-class ShareCreate(BaseModel):
-    model_config = ConfigDict(extra='forbid', str_strip_whitespace=True, frozen=True)
-    share: str = None # share name must end with '$'
-    path: Path
-    policy_id: int = None
-    protocols: Set[InstanceOf[ProtocolEnum]] = {}
+class ViewCreate(BaseModel):
+    model_config = ConfigDict(extra="forbid", str_strip_whitespace=True, frozen=True)
+    path: VastPath
+    policy_id: int
+    protocols: frozenset[ProtocolEnum] = Field(min_length=1)
     create_dir: bool = True
+
+    # sorted, so the same view always produces the same body
+    @field_serializer("protocols")
+    def serialize_protocols(self, protocols: frozenset[ProtocolEnum], _info):
+        return sorted(protocol.value for protocol in protocols)
+
+
+class ShareCreate(ViewCreate):
+    """a view with an SMB share: ViewCreate's fields, plus the share name and the ACLs for the new directory"""
+
+    share: str | None = None  # share name must end with '$'
     inherit_acl: bool = True
-    create_dir_acls: Set[ACL] = {}
+    create_dir_acls: frozenset[ACL] = frozenset()
 
-    @field_serializer('path')
-    def serialize_path(self, path: Path, _info):
-        return path.as_posix()
+    @field_serializer("create_dir_acls")
+    def serialize_create_dir_acls(self, create_dir_acls: frozenset[ACL], _info):
+        return [acl.model_dump(mode="json") for acl in sorted(create_dir_acls, key=ACL.sort_key)]
 
-    @field_serializer('protocols')
-    def serialize_protocols(self, protocols: Set[ProtocolEnum], _info):
-        return [i.value for i in protocols]
-    
-    @field_validator("policy_id")
+    @field_validator("create_dir_acls", mode="before")
     @classmethod
-    def is_valid_policy_id(cls, policy_id: int) -> int:
-        if policy_id is None:
-            raise ValueError("policy_id must be set")
-        return policy_id
-    
-    @field_validator("protocols")
-    @classmethod
-    def is_valid_protocols(cls, protocols: Set[ProtocolEnum]) -> Set[ProtocolEnum]:
-        if len(protocols) == 0:
-            raise ValueError("protocols must not be empty")
-        else:
-            return protocols
+    def no_acls_if_none(cls, create_dir_acls):
+        return frozenset() if create_dir_acls is None else create_dir_acls
 
     @field_validator("share")
     @classmethod
-    def is_valid_share_name(cls, share: str):
+    def is_valid_share_name(cls, share: str | None):
         if share is not None and not share.endswith("$"):
             raise ValueError("share_name must end with '$'")
         else:
             return share
 
-    @field_validator("path")
-    @classmethod
-    def is_valid_unix_path(cls, path: Path) -> Path:
-        return validate_path(path)
-    
     @model_validator(mode="after")
-    def share_if_smb(self) -> 'ShareCreate':
+    def share_if_smb(self) -> "ShareCreate":
         if ProtocolEnum.SMB in self.protocols and self.share is None:
             raise ValueError("SMB views require a share name")
         return self
-    
-
-class ViewCreate(BaseModel):
-    model_config = ConfigDict(extra='forbid', str_strip_whitespace=True, frozen=True)
-    path: Path
-    policy_id: int = None
-    protocols: Set[InstanceOf[ProtocolEnum]] = {}
-    create_dir: bool = True
-
-    @field_serializer('path')
-    def serialize_path(self, path: Path, _info):
-        return path.as_posix()
-
-    @field_serializer('protocols')
-    def serialize_protocols(self, protocols: Set[ProtocolEnum], _info):
-        return [i.value for i in protocols]
-    
-    @field_validator("policy_id")
-    @classmethod
-    def is_valid_policy_id(cls, policy_id: int) -> int:
-        if policy_id is None:
-            raise ValueError("policy_id must be set")
-        return policy_id
-    
-    @field_validator("protocols")
-    @classmethod
-    def is_valid_protocols(cls, protocols: Set[ProtocolEnum]) -> Set[ProtocolEnum]:
-        if len(protocols) == 0:
-            raise ValueError("protocols must not be empty")
-        else:
-            return protocols
-
-    @field_validator("path")
-    @classmethod
-    def is_valid_unix_path(cls, path: Path) -> Path:
-        return validate_path(path)
 
 
 class ProtectionPolicyFrame(BaseModel):
-    model_config = ConfigDict(extra='forbid', str_strip_whitespace=True, frozen=True)
-    every: str
-    start_at: str
-    keep_local: str
-    keep_remote: str = '0s'
-
     """
+    VAST names the fields with hyphens, and so does the dump; build it with underscores or hyphens:
     {'every': '1D', 'start-at': '2024-01-22 17:00:00', 'keep-local': '2M', 'keep-remote': '0s'}
     """
+
+    model_config = ConfigDict(
+        extra="forbid", str_strip_whitespace=True, frozen=True, populate_by_name=True, serialize_by_alias=True
+    )
+    every: str
+    start_at: str = Field(alias="start-at")
+    keep_local: str = Field(alias="keep-local")
+    keep_remote: str = Field(default="0s", alias="keep-remote")
+
     @field_validator("every")
     @classmethod
     def is_valid_every(cls, every: str) -> str:
-        if every not in ['1D', '1W', '1M', '1Y']:
+        if every not in ["1D", "1W", "1M", "1Y"]:
             raise ValueError("Invalid value for 'every'")
         return every
-    
-    @field_validator("start_at")
-    @classmethod
-    def is_valid_start_at(cls, start_at: str) -> str:
-        return start_at
-    
-    @field_validator("keep_local")
-    @classmethod
-    def is_valid_keep_local(cls, keep_local: str) -> str:
-        return keep_local
-    
-    @field_validator("keep_remote")
-    @classmethod
-    def is_valid_keep_remote(cls, keep_remote: str) -> str:
-        return keep_remote
-    
+
 
 class ProtectionPolicyCreate(BaseModel):
-    model_config = ConfigDict(extra='forbid', str_strip_whitespace=True, frozen=True)
+    model_config = ConfigDict(extra="forbid", str_strip_whitespace=True, frozen=True)
     name: str
     frames: list[ProtectionPolicyFrame]
     prefix: str
     clone_type: CloneTypeEnum = CloneTypeEnum.LOCAL
     indestructible: bool = False
 
-    @field_serializer('frames')
-    def serialize_frames(self, frames: list[ProtectionPolicyFrame], _info):
-        return [frame.dict() for frame in frames]
-    
-    @field_serializer('clone_type')
-    def serialize_clone_type(self, clone_type: CloneTypeEnum, _info):
-        return clone_type.value
-                
-    @field_validator("name")
-    @classmethod
-    def is_valid_name(cls, name: str) -> str:
-        return name
-    
-    @field_validator("frames")
-    @classmethod
-    def is_valid_frames(cls, frames: list[ProtectionPolicyFrame]) -> list[ProtectionPolicyFrame]:
-        return frames
-    
-    @field_validator("prefix")
-    @classmethod
-    def is_valid_prefix(cls, prefix: str) -> str:
-        return prefix
-    
-    @field_validator("clone_type")
-    @classmethod
-    def is_valid_clone_type(cls, clone_type: str) -> str:
-        if clone_type not in ['LOCAL', 'REMOTE']:
-            raise ValueError("Invalid value for 'clone_type'")
-        return clone_type
-
 
 class ProtectedPathCreate(BaseModel):
-    model_config = ConfigDict(extra='forbid', str_strip_whitespace=True, frozen=True)
+    model_config = ConfigDict(extra="forbid", str_strip_whitespace=True, frozen=True)
     name: str
-    source_dir: Path
+    source_dir: VastPath
     enabled: bool = True
     protection_policy_id: int
     tenant_id: int
 
-    @field_serializer('source_dir')
-    def serialize_source_dir(self, source_dir: Path, _info):
-        return source_dir.as_posix()
-    
-    @field_validator("source_dir")
-    @classmethod
-    def is_valid_unix_path(cls, path: Path) -> Path:
-        return validate_path(path)
-    
 
 class PathBody(BaseModel):
-    model_config = ConfigDict(extra='allow', str_strip_whitespace=True)
-    path: Path
+    """a path, as a query or a body; dump with exclude_none=True, so a tenant_id of None is left out"""
 
-    @field_serializer('path')
-    def serialize_path(self, path: Path, _info):
-        return path.as_posix()
+    model_config = ConfigDict(extra="forbid", str_strip_whitespace=True)
+    path: VastPath
+    tenant_id: int | None = None
 
-    @field_validator("path")
-    @classmethod
-    def is_valid_unix_path(cls, path: Path) -> Path:
-        return validate_path(path)
+
+class SourceDirQuery(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    source_dir: VastPath
 
 
 class FolderCreateOrUpdate(BaseModel):
-    model_config = ConfigDict(extra='forbid', str_strip_whitespace=True, frozen=True)
-    path: Path
+    model_config = ConfigDict(extra="forbid", str_strip_whitespace=True, frozen=True)
+    path: VastPath
     owner_is_group: bool = False
-    user: str = None
-    group: str = None
+    user: str | None = None
+    group: str | None = None
 
-    @field_serializer('path')
-    def serialize_path(self, path: Path, _info):
-        return path.as_posix()
-    
+
+class CatalogQuery(BaseModel):
+    """
+    query for GET bigcatalogconfig/query_data. filters maps a catalog column to a list of conditions,
+    which are OR'ed; the operators within one condition are AND'ed:
+    {'parent_path': [{'eq': '/smb/gisusers/'}], 'size': [{'ge': 1024, 'lt': 1048576}]}
+    There's no page: VAST 5.3 refuses it (400), and returns every matching row in one response anyway.
+    """
+
+    model_config = ConfigDict(extra="forbid", str_strip_whitespace=True, frozen=True)
+    path: str = "/"
+    # VAST rejects a query without a filter
+    filters: dict[NonEmptyStr, Annotated[list[CatalogCondition], Field(min_length=1)]] = Field(min_length=1)
+    fields: list[NonEmptyStr] = Field(default_factory=lambda: ["name"], min_length=1)
+    # left out unless given: VAST 5.3 has no default, and a limit below the number of rows that match
+    # makes the query hang rather than cut the result short
+    limit: PositiveInt | None = None
+    ordering: list[NonEmptyStr] | None = None
+    snapshot: NonEmptyStr | None = None
+    tenant_id: PositiveInt | None = None
+
+    def query_params(self) -> dict[str, Any]:
+        """as GET query parameters: filters as the JSON string VAST expects, and None left out"""
+        params = self.model_dump(mode="json", exclude_none=True)
+        params["filters"] = json.dumps(params["filters"])
+        return params
+
+    # validate_path rejects "/" and trailing slashes, both of which catalog queries use
     @field_validator("path")
     @classmethod
-    def is_valid_unix_path(cls, path: Path) -> Path:
-        return validate_path(path)
-    
-
-class QuotaUpdate(BaseModel):
-    model_config = ConfigDict(extra='forbid', str_strip_whitespace=True)
-    soft_limit: Optional[PositiveInt] = None
-    hard_limit: PositiveInt
-
-    @model_validator(mode="after")
-    def soft_limit_below_hard_limit(self) -> 'QuotaUpdate':
-        if self.soft_limit is None:
-            self.soft_limit = self.hard_limit
-        if self.hard_limit < self.soft_limit:
-            raise ValueError("'soft_limit' cannot be larger than 'hard_limit'")
-        return self
-
+    def is_valid_catalog_path(cls, path: str) -> str:
+        if not path.startswith("/"):
+            raise ValueError("path must be absolute")
+        if ".." in path.split("/"):
+            raise ValueError("path must not contain '..'")
+        if any(char.isspace() or not char.isprintable() for char in path):
+            raise ValueError("path must not contain whitespace or control characters")
+        return path

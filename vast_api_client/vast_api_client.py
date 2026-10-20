@@ -1,54 +1,174 @@
+import json
+import logging
+import os
+from collections.abc import Sequence
 from pathlib import Path
-from urllib.parse import urljoin
-from vast_api_client.models import (ACL, ACLGrantee, ACLPerm, PathBody, ViewCreate, ShareCreate, QuotaCreate, 
-                                    FolderCreateOrUpdate,
-                                    QuotaUpdate, ProtectedPathCreate, ProtocolEnum)
-from vast_api_client.utils import ResourceExistsError
-from vast_api_client.abstract_client import AbstractClient
+from typing import Any
+
+import certifi
+import urllib3
+import vastpy
+
+from vast_api_client.credentials import VastCredentials
+from vast_api_client.exceptions import (
+    ResourceExistsError,
+    VastAPIError,
+    VastConnectionError,
+    VastError,
+    VastNotFoundError,
+)
+from vast_api_client.models import (
+    ACL,
+    ACLGrantee,
+    ACLPerm,
+    CatalogQuery,
+    FolderCreateOrUpdate,
+    PathBody,
+    ProtectedPathCreate,
+    ProtocolEnum,
+    QuotaCreate,
+    QuotaUpdate,
+    ShareCreate,
+    SourceDirQuery,
+    ViewCreate,
+)
+from vast_api_client.transport import CATALOG_TIMEOUT, DEFAULT_RETRIES, DEFAULT_TIMEOUT, TimedVASTClient
+
+logger = logging.getLogger(__name__)
+
+# VAST answers folders/stat_path for a path that doesn't exist with a 503, not a 404:
+# {"detail": "Template directory path wasn't found", "code": "service_unavailable"}
+# service_unavailable alone is any 503's code, so the detail has to say the path wasn't found too
+MISSING_FOLDER_STATUS = 503
+MISSING_FOLDER_CODE = "service_unavailable"
+MISSING_FOLDER_DETAIL = "path wasn't found"
+
+# urllib3 puts fields in the query string for these methods; for any other it would send them as a form body
+QUERY_STRING_METHODS = {"GET", "HEAD", "OPTIONS", "DELETE"}
 
 
-class VASTClient(AbstractClient):
+def _verify_certs_from_env() -> bool:
+    """Legacy switch, read as the old client read it: anything but true, 1 or yes turns off verification."""
+    return os.getenv("VERIFY_CERTS", "true").strip().lower() in ("true", "1", "yes")
+
+
+def _reveal(secret) -> str | None:
+    return secret.get_secret_value() if secret is not None else None
+
+
+class VASTClient:
     """
-    used to get information from the VAST storage unit
+    used to get information from the VAST storage unit.
+    Requests go through vastpy. Its client is exposed as `api`, for endpoints not wrapped here:
+    vast.api["quotas"].get(path="/rstore/lab")
     """
 
-    def __init__(self, host: str, user: str = None, password: str = None, token: str = None, refresh_token: str = None, version: str = 'v7'):
+    def __init__(
+        self,
+        host: str,
+        user: str = None,
+        password: str = None,
+        *,
+        token: str = None,
+        tenant: str = None,
+        version: str = "v7",
+        ca_file: str | Path = None,
+        verify: bool = True,
+        timeout: float | urllib3.Timeout | None = DEFAULT_TIMEOUT,
+        retries: int | urllib3.Retry = DEFAULT_RETRIES,
+    ):
         """
-        you can supply a token and refresh token directly if you have one already
+        supply either user and password, or an API token. Nothing is sent until the first request.
+        :param host: VMS address, without scheme: "vast.example.edu"
         :param user:
         :param password:
-        :param host:
-        :param token:
-        :param refresh_token:
+        :param token: API token, sent as "Authorization: Api-Token <token>"
+        :param tenant: tenant name, sent as X-Tenant-Name
         :param version: API version to use (default is 'v7')
+        :param ca_file: CA bundle to verify the server certificate with (default is certifi's)
+        :param verify: False skips certificate verification, as does setting the env var VERIFY_CERTS to
+            anything but true, 1 or yes
+        :param timeout: seconds, or a urllib3.Timeout for separate connect and read limits (default 10s to
+            connect, 30s to read). None waits indefinitely.
+        :param retries: retries, or a urllib3.Retry (default: one more try if the connection fails)
         """
+        credentials = VastCredentials(user=user, password=password, token=token, tenant=tenant)
         self.host = host
-        self.url = urljoin(f'https://{host}', f'api/{version}/')
-       
-        if token is not None and refresh_token is not None:
-            self.token = token
-            self.refresh_token = refresh_token
-        elif user is not None and password is not None:
-            self.get_token(user, password)
+        self.version = version
+
+        if verify and _verify_certs_from_env():
+            cert_file = str(ca_file) if ca_file is not None else certifi.where()
         else:
-            raise ValueError('You must supply either a username and password or a token and refresh token')
+            # vastpy skips verification when it gets no cert_file
+            logger.warning(f"TLS certificate verification is off for {host}")
+            cert_file = None
 
-    def get_token(self, username, passwd) -> None:
-        """
-        use to get a token and refresh token. token has key 'access', refresh token has key 'refresh'
-        :param username:
-        :param passwd:
-        """
-        body = {'username': username, 'password': passwd}
-        r = self._send_post_request('token/', body, skip_auth=True)
-        self.token = r['access']
-        self.refresh_token = r['refresh']
+        self.api = TimedVASTClient(
+            user=credentials.user,
+            password=_reveal(credentials.password),
+            token=_reveal(credentials.token),
+            tenant=credentials.tenant,
+            address=host,
+            cert_file=cert_file,
+            version=version,
+            timeout=timeout,
+            retries=retries,
+        )
 
-    def renew_token(self, refresh_token) -> None:
-        body = {'refresh': refresh_token}
-        r = self._send_post_request('token/refresh/', body, skip_auth=True)
-        self.token = r['access']
-        self.refresh_token = r['refresh']
+    def __repr__(self):
+        return f"VASTClient(host={self.host!r}, version={self.version!r})"
+
+    def _call(
+        self,
+        method: str,
+        endpoint: str,
+        *,
+        query: dict = None,
+        body: dict = None,
+        timeout: float | urllib3.Timeout | None = None,
+    ):
+        """
+        Send one request to the API. Every request the client makes goes through here.
+        :param method: GET, POST, PATCH or DELETE
+        :param endpoint: path below api/<version>/, without leading or trailing slashes: "quotas/5"
+        :param query: query parameters, for GET and DELETE
+        :param body: JSON body, for POST, PATCH and DELETE
+        :param timeout: this request's timeout, for an endpoint slower than the rest; the client's otherwise
+        :return: the parsed JSON response, or None if the response has no body or one that isn't JSON
+        :raises VastNotFoundError: the API answered 404
+        :raises VastAPIError: the API answered with another non-2xx status
+        :raises VastConnectionError: no HTTP answer: connection refused, TLS failure, etc.
+        :raises VastError: an answer that couldn't be read: malformed JSON, or an error body that isn't UTF-8
+        """
+        if query and method not in QUERY_STRING_METHODS:
+            raise ValueError(f"query parameters can't be sent with {method}")
+        logger.debug(f"{method} {endpoint} query={query} body={body}")
+        try:
+            result = self.api.endpoint_client(endpoint, timeout).request(method, fields=query, data=body)
+        except vastpy.RESTFailure as failure:
+            error_class = VastNotFoundError if failure.status == 404 else VastAPIError
+            raise error_class(
+                status=failure.status,
+                method=method,
+                endpoint=endpoint,
+                body=failure.data.decode("utf-8", errors="replace"),
+            ) from failure
+        except urllib3.exceptions.HTTPError as error:
+            raise VastConnectionError(f"{method} {endpoint} on {self.host} failed: {error}") from error
+        except ValueError as error:
+            # vastpy's json.loads of a malformed body, or RESTFailure decoding a non-UTF-8 error body
+            raise VastError(f"{method} {endpoint} on {self.host}: unreadable response: {error}") from error
+        # vastpy returns raw bytes unless the Content-Type says JSON: b"" for a 204, but also JSON
+        # under another Content-Type, which the old requests transport parsed regardless
+        if isinstance(result, bytes):
+            if not result:
+                return None
+            try:
+                return json.loads(result)
+            except ValueError:
+                logger.warning(f"{method} {endpoint} answered with a body that isn't JSON; ignoring it")
+                return None
+        return result
 
     def get_quotas(self, path: Path = None):
         """
@@ -57,59 +177,73 @@ class VASTClient(AbstractClient):
         :return: list of quotas
         """
         if path is not None:
-            body = PathBody(path=path).model_dump(mode='json')
-            return self._send_get_request('quotas/', params=body)
-        else:
-            return self._send_get_request('quotas/')
+            query = PathBody(path=path).model_dump(mode="json", exclude_none=True)
+            return self._call("GET", "quotas", query=query)
+        return self._call("GET", "quotas")
 
     def get_views(self, path: Path = None):
         if path is not None:
-            body = PathBody(path=path).model_dump(mode='json')
-            return self._send_get_request('views/', params=body)
-        return self._send_get_request('views/')
+            query = PathBody(path=path).model_dump(mode="json", exclude_none=True)
+            return self._call("GET", "views", query=query)
+        return self._call("GET", "views")
 
     @staticmethod
-    def create_acl_from_str(perm: str, grantee: str, sid_str: str, uid_or_gid: int) -> ACL:
+    def create_acl_from_str(perm: str, grantee: str, sid_str: str, uid_or_gid: int | None) -> ACL:
         """
         create an ACL object to be used with add_view if you don't easy access to model enums
         :return: ACL object
         """
-        return ACL(perm=ACLPerm(perm), grantee=ACLGrantee(grantee), sid_str=sid_str, uid_or_gid=uid_or_gid)
-    
-    def add_view(self, path: Path,
-                protocols: set[ProtocolEnum] = None,
-                share_name: str = None,
-                policy_id: int = None,
-                acls: set[ACL] = None,
-                dry_run=False):
+        return ACL(
+            perm=ACLPerm(perm),
+            grantee=ACLGrantee(grantee),
+            sid_str=sid_str,
+            uid_or_gid=uid_or_gid,
+        )
+
+    def add_view(
+        self,
+        path: Path,
+        protocols: set[ProtocolEnum] = None,
+        share_name: str = None,
+        policy_id: int = None,
+        acls: set[ACL] = None,
+        dry_run=False,
+    ):
         """
         Add a view to the storage system
-        :param name: name of the view
         :param path: path of the view
         :param protocols: set of protocols to be used with the view
         :param policy_id: policy to use with the view. create a new enum value if needed
         :param share_name: name of the share to be used with the view. must end with '$' if specified
         :param acls: set of ACLs to be used with the view.
         :param dry_run: if True, will not actually create the view
-        :return: message indicating success or failure
+        :return: the API's response, or None on a dry run; a failure raises
         """
         # --gid-inheritance linux|bsd ; default is linux, but we should select bsd. new files inherit the gid of the parent directory
-        vc = None
         if share_name is None:
             vc = ViewCreate(path=path, protocols=protocols, policy_id=policy_id)
         else:
-            vc = ShareCreate(path=path, protocols=protocols, share=share_name, policy_id=policy_id, create_dir_acls=acls)
-        print(f"creating view {vc}")
-        if not dry_run:
-            return self._send_post_request('views/', vc.model_dump(mode='json'))
-        
-        print('skipping creation for dry run!')
-        print(vc.model_dump(mode='json'))
-        return None
+            vc = ShareCreate(
+                path=path,
+                protocols=protocols,
+                share=share_name,
+                policy_id=policy_id,
+                create_dir_acls=acls,
+            )
+        if dry_run:
+            logger.info(f"dry run, not creating view: {vc.model_dump(mode='json')}")
+            return None
+        logger.info(f"creating view {vc}")
+        return self._call("POST", "views", body=vc.model_dump(mode="json"))
 
-    def add_quota(self, name: str, path: Path,
-                hard_limit: int, soft_limit: int = None,
-                dry_run=False):
+    def add_quota(
+        self,
+        name: str,
+        path: Path,
+        hard_limit: int,
+        soft_limit: int = None,
+        dry_run=False,
+    ):
         """
         Add a quota to the storage system
         :param name: name of the quota
@@ -117,17 +251,16 @@ class VASTClient(AbstractClient):
         :param hard_limit: hard limit of the quota in bytes
         :param soft_limit: soft limit of the quota in bytes
         :param dry_run: if True, will not actually create the quota
-        :return: message indicating success or failure
+        :return: the API's response, or None on a dry run; a failure raises
         """
-        name = name[:-1] if name.endswith('$') else name
+        name = name.removesuffix("$")
         qc = QuotaCreate(name=name, path=path, soft_limit=soft_limit, hard_limit=hard_limit)
-        print(f"creating quota {qc}")
         if dry_run:
-            print('skipping creation for dry run!')
-            print(qc.model_dump(mode='json'))
-        else:
-            return self._send_post_request('quotas/', qc.model_dump(mode='json'))
-    
+            logger.info(f"dry run, not creating quota: {qc.model_dump(mode='json')}")
+            return None
+        logger.info(f"creating quota {qc}")
+        return self._call("POST", "quotas", body=qc.model_dump(mode="json"))
+
     def add_folder(self, path: Path, group: str, user: str = None):
         """
         Add a folder to the storage system
@@ -135,9 +268,9 @@ class VASTClient(AbstractClient):
         :param group: group that owns the folder
         :param user: user that owns the folder
         """
-        owner_is_group = (group == user)
+        owner_is_group = group == user
         folder = FolderCreateOrUpdate(path=path, owner_is_group=owner_is_group, user=user, group=group)
-        return self._send_post_request('folders/create_folder/', folder.model_dump(mode='json'))
+        return self._call("POST", "folders/create_folder", body=folder.model_dump(mode="json"))
 
     def modify_folder(self, path: Path, group: str, user: str = None):
         """
@@ -146,25 +279,18 @@ class VASTClient(AbstractClient):
         :param group: group that owns the folder
         :param user: user that owns the folder
         """
-        owner_is_group = (group == user)
-        if user is None and owner_is_group is None:
-            folder = FolderCreateOrUpdate(path=path, group=group)
-        elif user is None:
-            folder = FolderCreateOrUpdate(path=path, group=group, owner_is_group=owner_is_group)
-        elif owner_is_group is None:
-            folder = FolderCreateOrUpdate(path=path, group=group, user=user)
-        else:
-            folder = FolderCreateOrUpdate(path=path, group=group, user=user, owner_is_group=owner_is_group)
-        return self._send_post_request('folders/create_folder/', folder.model_dump(exclude_unset=True, exclude_defaults=True, mode='json'))
+        folder = FolderCreateOrUpdate(path=path, group=group, user=user, owner_is_group=group == user)
+        # only what's changing: a user of None and owner_is_group False are left out
+        return self._call("POST", "folders/create_folder", body=folder.model_dump(exclude_defaults=True, mode="json"))
 
     def delete_folder(self, path: Path, tenant_id: int = None):
         """
         DELETE /folders/delete_folder/
+        :return: {"status": "deleted"}; a failure raises
         """
-        body = PathBody(path=path).model_dump(mode='json')
-        if tenant_id is not None:
-            body['tenant_id'] = tenant_id
-        return self._send_delete_request('folders/delete_folder/', body)
+        body = PathBody(path=path, tenant_id=tenant_id).model_dump(mode="json", exclude_none=True)
+        self._call("DELETE", "folders/delete_folder", body=body)
+        return {"status": "deleted"}
 
     def get_folder(self, path: Path, tenant_id: int = None):
         """
@@ -175,43 +301,58 @@ class VASTClient(AbstractClient):
             "owning_group": "string",
             "owning_gid": "string",
             "has_default_acl": true,
-            "is_directory": true, 
+            "is_directory": true,
             "children": 0
         }
+        :raises VastNotFoundError: the path doesn't exist
         """
-        body = PathBody(path=path).model_dump(mode='json')
-        if tenant_id is not None:
-            body['tenant_id'] = tenant_id
-        return self._send_post_request('folders/stat_path/', body)
+        body = PathBody(path=path, tenant_id=tenant_id).model_dump(mode="json", exclude_none=True)
+        try:
+            return self._call("POST", "folders/stat_path", body=body)
+        except VastAPIError as error:
+            if (
+                error.status == MISSING_FOLDER_STATUS
+                and error.code == MISSING_FOLDER_CODE
+                and MISSING_FOLDER_DETAIL in (error.detail or "")
+            ):
+                raise VastNotFoundError(
+                    status=error.status, method=error.method, endpoint=error.endpoint, body=error.body
+                ) from error
+            raise
 
     def update_quota_size(self, quota_id: int, new_size: int):
         """
         :param quota_id: int
         :param new_size: int in bytes
-        :return: message indicating success or failure
+        :return: the API's response; a failure raises
         """
         if isinstance(quota_id, int) and isinstance(new_size, int):
             body = QuotaUpdate(soft_limit=new_size, hard_limit=new_size)
-            return self._send_patch_request(f'quotas/{str(quota_id)}/', body.model_dump(mode='json'))
+            return self._call("PATCH", f"quotas/{quota_id}", body=body.model_dump(mode="json"))
         else:
-            raise TypeError('quota_id and size must be of type int')
+            raise TypeError("quota_id and size must be of type int")
 
     def delete_quota(self, quota_id: int):
+        """
+        :return: {"status": "deleted"}; a failure raises
+        """
         if isinstance(quota_id, int):
-            return self._send_delete_request(f'quotas/{str(quota_id)}/')
+            self._call("DELETE", f"quotas/{quota_id}")
+            return {"status": "deleted"}
         else:
-            raise TypeError('quota_id must be of type int')
+            raise TypeError("quota_id must be of type int")
 
     def get_total_capacity(self):
         """
         :return:
         """
-        return self._send_get_request('capacity/')
-    
+        return self._call("GET", "capacity")
+
     def get_protected_paths(self, source_dir: Path = None):
         if source_dir is None:
-            return self._send_get_request('protectedpaths/')
-        return self._send_get_request('protectedpaths/', params={'source_dir': source_dir.as_posix()})
+            return self._call("GET", "protectedpaths")
+        query = SourceDirQuery(source_dir=source_dir).model_dump(mode="json")
+        return self._call("GET", "protectedpaths", query=query)
 
     def add_protected_path(self, name: str, source_dir: Path, protection_policy_id: int, tenant_id: int):
         """
@@ -220,20 +361,72 @@ class VASTClient(AbstractClient):
         :param source_dir: source directory of the protected path
         :param protection_policy_id: id of the protection policy to use
         :param tenant_id: id of the tenant
-        :return: message indicating success or failure
+        :return: the API's response; a failure raises
         """
-        protected_paths = self._send_get_request('protectedpaths/', params={'source_dir': source_dir.as_posix()})
-        if source_dir.as_posix() in [i['source_dir'] for i in protected_paths]:
-            raise ResourceExistsError(f'This path already exists as a protected path on {self.host}!')
-        ppc = ProtectedPathCreate(name=name, source_dir=source_dir, protection_policy_id=protection_policy_id, tenant_id=tenant_id)
-        return self._send_post_request('protectedpaths/', ppc.model_dump(mode='json'))
-    
-    def get_protection_policies(self, name: str = None, policy_id: int = None, source_dir: Path = None):
-        if id is not None:
-            return self._send_get_request(f'protectionpolicies/{str(policy_id)}/')
-        if name is not None:
-            return self._send_get_request('protectionpolicies/', params={'name': name})
-        if source_dir is not None:
-            return self._send_get_request('protectionpolicies/', params={'source_dir': source_dir.as_posix()})
-        return self._send_get_request('protectionpolicies/')
+        ppc = ProtectedPathCreate(
+            name=name,
+            source_dir=source_dir,
+            protection_policy_id=protection_policy_id,
+            tenant_id=tenant_id,
+        )
+        body = ppc.model_dump(mode="json")
+        protected_paths = self.get_protected_paths(ppc.source_dir)
+        if body["source_dir"] in [i["source_dir"] for i in protected_paths]:
+            raise ResourceExistsError(f"This path already exists as a protected path on {self.host}!")
+        return self._call("POST", "protectedpaths", body=body)
 
+    def get_protection_policies(self, name: str = None, policy_id: int = None, source_dir: Path = None):
+        if policy_id is not None:
+            return self._call("GET", f"protectionpolicies/{policy_id}")
+        if name is not None:
+            return self._call("GET", "protectionpolicies", query={"name": name})
+        if source_dir is not None:
+            query = SourceDirQuery(source_dir=source_dir).model_dump(mode="json")
+            return self._call("GET", "protectionpolicies", query=query)
+        return self._call("GET", "protectionpolicies")
+
+    def query_catalog(
+        self,
+        filters: dict[str, list[dict[str, Any]]],
+        fields: Sequence[str] = ("name",),
+        path: str = "/",
+        *,
+        limit: int = None,
+        ordering: Sequence[str] = None,
+        snapshot: str = None,
+        tenant_id: int = None,
+        timeout: float | urllib3.Timeout | None = CATALOG_TIMEOUT,
+    ):
+        """
+        Query the VAST Catalog, with GET bigcatalogconfig/query_data. The directories in /smb/gisusers/, say:
+        vast.query_catalog({"parent_path": [{"eq": "/smb/gisusers/"}], "element_type": [{"eq": "DIR"}]})
+        A query can take a minute or more, so keep it out of a web request. View permission on the logical
+        realm (view_logical, in VAST's read_only role) is enough: checked against the HPC VMS.
+
+        VAST 5.3 returns every matching row in one response: 749,336 of them in about 80s on the HPC VMS.
+        There's no paging (page is refused), and limit doesn't cut a result short: a limit below the number
+        of rows that match makes the query hang (still waiting after 15 minutes). So leave limit out. The
+        whole response is held in memory; for many millions of rows, the VAST DB SDK (vastdb) streams them.
+        :param filters: catalog column to a list of conditions, OR'ed; the operators in one condition
+            are AND'ed: {"size": [{"ge": 1024, "lt": 1048576}]}. VAST needs at least one.
+        :param fields: catalog columns to return
+        :param path: where in the catalog to look
+        :param limit: sent only if given, and then it must be at least the number of rows that match (see above)
+        :param ordering: columns to sort the rows by
+        :param snapshot: the catalog snapshot to query; the latest by default
+        :param tenant_id: the tenant to query
+        :param timeout: seconds, or a urllib3.Timeout (default 10s to connect, 300s to read): longer than
+            the client's, because catalog queries are slow
+        :return: VAST's response: {"count", "next", "prop_list", "results"}, where results is a list of
+            rows, each a list of values in prop_list's column order
+        """
+        query = CatalogQuery(
+            path=path,
+            filters=filters,
+            fields=fields,
+            limit=limit,
+            ordering=ordering,
+            snapshot=snapshot,
+            tenant_id=tenant_id,
+        )
+        return self._call("GET", "bigcatalogconfig/query_data", query=query.query_params(), timeout=timeout)
