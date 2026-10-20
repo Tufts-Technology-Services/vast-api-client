@@ -1,3 +1,6 @@
+import json
+
+
 class VastError(Exception):
     """Base class for every error this library raises."""
 
@@ -22,9 +25,18 @@ class VastAPIError(VastError):
     def __reduce__(self):
         return (self.__class__, (self.status, self.method, self.endpoint, self.body))
 
+    @property
+    def code(self) -> str | None:
+        """the "code" in VAST's JSON error body, such as "service_unavailable"; None if there isn't one"""
+        try:
+            error_body = json.loads(self.body)
+        except ValueError:
+            return None
+        return error_body.get("code") if isinstance(error_body, dict) else None
+
 
 class VastNotFoundError(VastAPIError):
-    """The API answered 404."""
+    """What was asked for doesn't exist: the API answered 404, or, for get_folder, VAST's 503 for a missing path."""
 
 
 class VastConnectionError(VastError):

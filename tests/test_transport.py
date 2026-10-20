@@ -438,3 +438,68 @@ def test_a_refused_connection_is_retried_once(monkeypatch):
     with pytest.raises(VastConnectionError):
         VASTClient(HOST, "alice", "secret", verify=False).get_quotas()
     assert attempts == [(HOST, 443), (HOST, 443)]
+
+
+# get_folder of a missing path: VAST answers 503, not 404
+
+MISSING_FOLDER_BODY = b'{"detail":"Template directory path wasn\'t found","code":"service_unavailable"}'
+
+
+def test_get_folder_of_a_missing_path_raises_not_found(client, vms):
+    vms.reply_raw(MISSING_FOLDER_BODY, status=503, content_type="application/json")
+
+    with pytest.raises(VastNotFoundError) as caught:
+        client.get_folder(Path("/projects/lab/missing"))
+
+    error = caught.value
+    assert (error.status, error.method, error.endpoint) == (503, "POST", "folders/stat_path")
+    assert error.code == "service_unavailable"
+    assert type(error.__cause__) is VastAPIError
+    assert isinstance(error.__cause__.__cause__, vastpy.RESTFailure)
+
+
+@pytest.mark.parametrize(
+    "status, body",
+    [
+        (503, b'{"detail":"VMS is busy","code":"throttled"}'),
+        (503, b"<html>503 Service Unavailable</html>"),
+        (500, MISSING_FOLDER_BODY),
+    ],
+)
+def test_get_folder_keeps_other_errors(client, vms, status, body):
+    vms.reply_raw(body, status=status, content_type="application/json")
+
+    with pytest.raises(VastAPIError) as caught:
+        client.get_folder(Path("/projects/lab"))
+
+    assert type(caught.value) is VastAPIError
+
+
+def test_get_folder_of_a_404_is_still_not_found(client, vms):
+    vms.reply_raw(b'{"detail": "Not found."}', status=404, content_type="application/json")
+
+    with pytest.raises(VastNotFoundError):
+        client.get_folder(Path("/projects/lab"))
+
+
+def test_a_missing_folder_503_elsewhere_is_not_mapped(client, vms):
+    vms.reply_raw(MISSING_FOLDER_BODY, status=503, content_type="application/json")
+
+    with pytest.raises(VastAPIError) as caught:
+        client.get_quotas()
+
+    assert type(caught.value) is VastAPIError
+
+
+@pytest.mark.parametrize(
+    "body, code",
+    [
+        ('{"detail": "x", "code": "service_unavailable"}', "service_unavailable"),
+        ('{"detail": "x"}', None),
+        ("[1, 2]", None),
+        ("<html>bad gateway</html>", None),
+        ("", None),
+    ],
+)
+def test_api_error_code(body, code):
+    assert VastAPIError(status=503, method="GET", endpoint="quotas", body=body).code == code

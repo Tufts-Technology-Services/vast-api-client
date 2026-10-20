@@ -36,6 +36,11 @@ from vast_api_client.transport import DEFAULT_RETRIES, DEFAULT_TIMEOUT, TimedVAS
 
 logger = logging.getLogger(__name__)
 
+# VAST answers folders/stat_path for a path that doesn't exist with a 503, not a 404:
+# {"detail": "Template directory path wasn't found", "code": "service_unavailable"}
+MISSING_FOLDER_STATUS = 503
+MISSING_FOLDER_CODE = "service_unavailable"
+
 # urllib3 puts fields in the query string for these methods; for any other it would send them as a form body
 QUERY_STRING_METHODS = {"GET", "HEAD", "OPTIONS", "DELETE"}
 
@@ -288,9 +293,17 @@ class VASTClient:
             "is_directory": true,
             "children": 0
         }
+        :raises VastNotFoundError: the path doesn't exist
         """
         body = PathBody(path=path, tenant_id=tenant_id).model_dump(mode="json", exclude_none=True)
-        return self._call("POST", "folders/stat_path", body=body)
+        try:
+            return self._call("POST", "folders/stat_path", body=body)
+        except VastAPIError as error:
+            if error.status == MISSING_FOLDER_STATUS and error.code == MISSING_FOLDER_CODE:
+                raise VastNotFoundError(
+                    status=error.status, method=error.method, endpoint=error.endpoint, body=error.body
+                ) from error
+            raise
 
     def update_quota_size(self, quota_id: int, new_size: int):
         """
