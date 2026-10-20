@@ -383,7 +383,6 @@ def test_catalog_query_defaults():
         "path": "/",
         "filters": GISUSERS_FILTERS,
         "fields": ["name"],
-        "limit": 1000,
     }
 
 
@@ -404,7 +403,8 @@ def test_catalog_query_params():
 
 
 def test_catalog_query_params_leave_out_what_isnt_set():
-    assert set(CatalogQuery(filters=GISUSERS_FILTERS).query_params()) == {"path", "filters", "fields", "limit"}
+    # limit especially: a limit below the rows that match makes VAST 5.3 hang
+    assert set(CatalogQuery(filters=GISUSERS_FILTERS).query_params()) == {"path", "filters", "fields"}
 
 
 def test_catalog_query_operators_in_one_condition_are_kept_together():

@@ -219,7 +219,7 @@ class CatalogQuery(BaseModel):
     query for GET bigcatalogconfig/query_data. filters maps a catalog column to a list of conditions,
     which are OR'ed; the operators within one condition are AND'ed:
     {'parent_path': [{'eq': '/smb/gisusers/'}], 'size': [{'ge': 1024, 'lt': 1048576}]}
-    There's no page: VAST 5.3 refuses it (400), and a query needing a second page doesn't return.
+    There's no page: VAST 5.3 refuses it (400), and returns every matching row in one response anyway.
     """
 
     model_config = ConfigDict(extra="forbid", str_strip_whitespace=True, frozen=True)
@@ -227,8 +227,9 @@ class CatalogQuery(BaseModel):
     # VAST rejects a query without a filter
     filters: dict[NonEmptyStr, Annotated[list[CatalogCondition], Field(min_length=1)]] = Field(min_length=1)
     fields: list[NonEmptyStr] = Field(default_factory=lambda: ["name"], min_length=1)
-    # always sent: VAST 5.3 documents no default. It has to be at least the number of rows that match.
-    limit: PositiveInt = 1000
+    # left out unless given: VAST 5.3 has no default, and a limit below the number of rows that match
+    # makes the query hang rather than cut the result short
+    limit: PositiveInt | None = None
     ordering: list[NonEmptyStr] | None = None
     snapshot: NonEmptyStr | None = None
     tenant_id: PositiveInt | None = None

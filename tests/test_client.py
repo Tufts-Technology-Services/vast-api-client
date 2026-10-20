@@ -323,7 +323,6 @@ def test_query_catalog(vast, api_calls):
                 "path": "/",
                 "filters": '{"parent_path": [{"eq": "/smb/gisusers/"}], "element_type": [{"eq": "DIR"}]}',
                 "fields": ["name"],
-                "limit": 1000,
             },
             None,
         )

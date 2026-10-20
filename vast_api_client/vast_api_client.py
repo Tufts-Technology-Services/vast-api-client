@@ -391,7 +391,7 @@ class VASTClient:
         fields: Sequence[str] = ("name",),
         path: str = "/",
         *,
-        limit: int = 1000,
+        limit: int = None,
         ordering: Sequence[str] = None,
         snapshot: str = None,
         tenant_id: int = None,
@@ -402,15 +402,15 @@ class VASTClient:
         vast.query_catalog({"parent_path": [{"eq": "/smb/gisusers/"}], "element_type": [{"eq": "DIR"}]})
         A query can take a minute or more, so keep it out of a web request.
 
-        Every row that matches has to fit in one response. On VAST 5.3, a query that matches more rows
-        than limit, and so needs a second page, doesn't return (still waiting after 15 minutes, against
-        about a minute for the same query that fits); and page is refused. So set limit above the rows
-        you expect. For more than a page's worth, use the VAST DB SDK (vastdb), which streams them.
+        VAST 5.3 returns every matching row in one response: 749,336 of them in about 80s on the HPC VMS.
+        There's no paging (page is refused), and limit doesn't cut a result short: a limit below the number
+        of rows that match makes the query hang (still waiting after 15 minutes). So leave limit out. The
+        whole response is held in memory; for many millions of rows, the VAST DB SDK (vastdb) streams them.
         :param filters: catalog column to a list of conditions, OR'ed; the operators in one condition
             are AND'ed: {"size": [{"ge": 1024, "lt": 1048576}]}. VAST needs at least one.
         :param fields: catalog columns to return
         :param path: where in the catalog to look
-        :param limit: the most rows to return; at least the number that match (see above)
+        :param limit: sent only if given, and then it must be at least the number of rows that match (see above)
         :param ordering: columns to sort the rows by
         :param snapshot: the catalog snapshot to query; the latest by default
         :param tenant_id: the tenant to query
