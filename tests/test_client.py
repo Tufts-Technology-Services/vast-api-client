@@ -91,6 +91,40 @@ def test_add_view_with_a_share_and_acls(vast, api_calls):
     ]
 
 
+def test_add_view_with_an_smb_only_group(vast, api_calls):
+    # SMB-only groups have no POSIX gid; uid_or_gid is left out of the ACL
+    acl = VASTClient.create_acl_from_str("CHANGE", "groups", "S-1-5-21-2", None)
+
+    vast.add_view(path=Path("/smb/lab"), protocols=[ProtocolEnum.SMB], share_name="lab$", policy_id=5, acls=[acl])
+
+    assert api_calls.requests[0][3]["create_dir_acls"] == [
+        {"perm": "CHANGE", "grantee": "groups", "sid_str": "S-1-5-21-2", "group_type": "SMB"}
+    ]
+
+
+def test_add_view_with_a_share_and_no_acls(vast, api_calls):
+    vast.add_view(path=Path("/smb/lab"), protocols={ProtocolEnum.SMB, ProtocolEnum.NFS}, share_name="lab$", policy_id=5)
+
+    body = api_calls.requests[0][3]
+    assert body["protocols"] == ["NFS", "SMB"]
+    assert body["create_dir_acls"] == []
+
+
+@pytest.mark.parametrize("protocols", [None, set(), []])
+def test_add_view_needs_protocols(vast, api_calls, protocols):
+    with pytest.raises(ValueError):
+        vast.add_view(path=Path("/cluster/lab"), protocols=protocols, policy_id=3)
+    assert api_calls.requests == []
+
+
+def test_add_view_needs_a_policy_id(vast, api_calls):
+    with pytest.raises(ValueError):
+        vast.add_view(path=Path("/cluster/lab"), protocols={ProtocolEnum.NFS})
+    with pytest.raises(ValueError):
+        vast.add_view(path=Path("/smb/lab"), protocols={ProtocolEnum.SMB}, share_name="lab$")
+    assert api_calls.requests == []
+
+
 def test_add_view_dry_run_sends_nothing(vast, api_calls):
     assert vast.add_view(path=Path("/cluster/lab"), protocols={ProtocolEnum.NFS}, policy_id=3, dry_run=True) is None
     assert api_calls.requests == []
@@ -143,6 +177,27 @@ def test_add_folder(vast, api_calls):
             None,
             {"path": "/rstore/lab", "owner_is_group": False, "user": "jdoe01", "group": "lab_group"},
         ),
+    ]
+
+
+def test_add_folder_without_a_user(vast, api_calls):
+    vast.add_folder(Path("/rstore/lab"), group="lab_group")
+
+    assert api_calls.requests == [
+        (
+            "POST",
+            "folders/create_folder",
+            None,
+            {"path": "/rstore/lab", "owner_is_group": False, "user": None, "group": "lab_group"},
+        )
+    ]
+
+
+def test_modify_folder_without_a_user(vast, api_calls):
+    vast.modify_folder(Path("/rstore/lab"), group="lab_group")
+
+    assert api_calls.requests == [
+        ("POST", "folders/create_folder", None, {"path": "/rstore/lab", "group": "lab_group"})
     ]
 
 
