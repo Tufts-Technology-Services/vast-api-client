@@ -1,12 +1,14 @@
 import re
 from enum import UNIQUE, StrEnum, verify
 from pathlib import Path
-from typing import Any
+from typing import Annotated, Any
 
 from pydantic import (
+    AfterValidator,
     BaseModel,
     ConfigDict,
     Field,
+    PlainSerializer,
     PositiveInt,
     field_serializer,
     field_validator,
@@ -24,6 +26,10 @@ def validate_path(path: Path):
         return path
     else:
         raise ValueError("invalid path")
+
+
+# a path checked by validate_path and sent as a POSIX string
+VastPath = Annotated[Path, AfterValidator(validate_path), PlainSerializer(Path.as_posix)]
 
 
 @verify(UNIQUE)
@@ -60,19 +66,10 @@ CATALOG_FILTER_OPERATORS = frozenset({"eq", "startswith", "gt", "ge", "lt", "le"
 class QuotaCreate(BaseModel):
     model_config = ConfigDict(extra="forbid", str_strip_whitespace=True)
     name: str
-    path: Path
+    path: VastPath
     soft_limit: PositiveInt | None = None
     hard_limit: PositiveInt
     create_dir: bool = False
-
-    @field_serializer("path")
-    def serialize_path(self, path: Path, _info):
-        return path.as_posix()
-
-    @field_validator("path")
-    @classmethod
-    def is_valid_unix_path(cls, path: Path) -> Path:
-        return validate_path(path)
 
     @model_validator(mode="after")
     def soft_limit_below_hard_limit(self) -> "QuotaCreate":
@@ -122,29 +119,18 @@ class ACL(BaseModel):
         )
 
 
-class ShareCreate(BaseModel):
+class ViewCreate(BaseModel):
     model_config = ConfigDict(extra="forbid", str_strip_whitespace=True, frozen=True)
-    share: str | None = None  # share name must end with '$'
-    path: Path
+    path: VastPath
     policy_id: int
     # validate_default, so leaving protocols out fails like passing an empty set
     protocols: frozenset[ProtocolEnum] = Field(default=frozenset(), validate_default=True)
     create_dir: bool = True
-    inherit_acl: bool = True
-    create_dir_acls: frozenset[ACL] = frozenset()
-
-    @field_serializer("path")
-    def serialize_path(self, path: Path, _info):
-        return path.as_posix()
 
     # sorted, so the same view always produces the same body
     @field_serializer("protocols")
     def serialize_protocols(self, protocols: frozenset[ProtocolEnum], _info):
         return sorted(protocol.value for protocol in protocols)
-
-    @field_serializer("create_dir_acls")
-    def serialize_create_dir_acls(self, create_dir_acls: frozenset[ACL], _info):
-        return [acl.model_dump(mode="json") for acl in sorted(create_dir_acls, key=ACL.sort_key)]
 
     @field_validator("protocols")
     @classmethod
@@ -153,6 +139,18 @@ class ShareCreate(BaseModel):
             raise ValueError("protocols must not be empty")
         else:
             return protocols
+
+
+class ShareCreate(ViewCreate):
+    """a view with an SMB share: ViewCreate's fields, plus the share name and the ACLs for the new directory"""
+
+    share: str | None = None  # share name must end with '$'
+    inherit_acl: bool = True
+    create_dir_acls: frozenset[ACL] = frozenset()
+
+    @field_serializer("create_dir_acls")
+    def serialize_create_dir_acls(self, create_dir_acls: frozenset[ACL], _info):
+        return [acl.model_dump(mode="json") for acl in sorted(create_dir_acls, key=ACL.sort_key)]
 
     @field_validator("create_dir_acls", mode="before")
     @classmethod
@@ -167,47 +165,11 @@ class ShareCreate(BaseModel):
         else:
             return share
 
-    @field_validator("path")
-    @classmethod
-    def is_valid_unix_path(cls, path: Path) -> Path:
-        return validate_path(path)
-
     @model_validator(mode="after")
     def share_if_smb(self) -> "ShareCreate":
         if ProtocolEnum.SMB in self.protocols and self.share is None:
             raise ValueError("SMB views require a share name")
         return self
-
-
-class ViewCreate(BaseModel):
-    model_config = ConfigDict(extra="forbid", str_strip_whitespace=True, frozen=True)
-    path: Path
-    policy_id: int
-    # validate_default, so leaving protocols out fails like passing an empty set
-    protocols: frozenset[ProtocolEnum] = Field(default=frozenset(), validate_default=True)
-    create_dir: bool = True
-
-    @field_serializer("path")
-    def serialize_path(self, path: Path, _info):
-        return path.as_posix()
-
-    # sorted, so the same view always produces the same body
-    @field_serializer("protocols")
-    def serialize_protocols(self, protocols: frozenset[ProtocolEnum], _info):
-        return sorted(protocol.value for protocol in protocols)
-
-    @field_validator("protocols")
-    @classmethod
-    def is_valid_protocols(cls, protocols: frozenset[ProtocolEnum]) -> frozenset[ProtocolEnum]:
-        if len(protocols) == 0:
-            raise ValueError("protocols must not be empty")
-        else:
-            return protocols
-
-    @field_validator("path")
-    @classmethod
-    def is_valid_unix_path(cls, path: Path) -> Path:
-        return validate_path(path)
 
 
 class ProtectionPolicyFrame(BaseModel):
@@ -246,50 +208,23 @@ class ProtectionPolicyCreate(BaseModel):
 class ProtectedPathCreate(BaseModel):
     model_config = ConfigDict(extra="forbid", str_strip_whitespace=True, frozen=True)
     name: str
-    source_dir: Path
+    source_dir: VastPath
     enabled: bool = True
     protection_policy_id: int
     tenant_id: int
 
-    @field_serializer("source_dir")
-    def serialize_source_dir(self, source_dir: Path, _info):
-        return source_dir.as_posix()
-
-    @field_validator("source_dir")
-    @classmethod
-    def is_valid_unix_path(cls, path: Path) -> Path:
-        return validate_path(path)
-
 
 class PathBody(BaseModel):
     model_config = ConfigDict(extra="allow", str_strip_whitespace=True)
-    path: Path
-
-    @field_serializer("path")
-    def serialize_path(self, path: Path, _info):
-        return path.as_posix()
-
-    @field_validator("path")
-    @classmethod
-    def is_valid_unix_path(cls, path: Path) -> Path:
-        return validate_path(path)
+    path: VastPath
 
 
 class FolderCreateOrUpdate(BaseModel):
     model_config = ConfigDict(extra="forbid", str_strip_whitespace=True, frozen=True)
-    path: Path
+    path: VastPath
     owner_is_group: bool = False
     user: str | None = None
     group: str | None = None
-
-    @field_serializer("path")
-    def serialize_path(self, path: Path, _info):
-        return path.as_posix()
-
-    @field_validator("path")
-    @classmethod
-    def is_valid_unix_path(cls, path: Path) -> Path:
-        return validate_path(path)
 
 
 class QuotaUpdate(BaseModel):

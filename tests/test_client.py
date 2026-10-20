@@ -347,3 +347,9 @@ def test_query_catalog_rejects_bad_filters(vast, api_calls, filters):
     with pytest.raises(ValueError):
         vast.query_catalog(filters)
     assert api_calls.requests == []
+
+
+def test_query_catalog_refuses_fields_as_a_string(vast, api_calls):
+    with pytest.raises(TypeError):
+        vast.query_catalog({"name": [{"eq": "report"}]}, fields="size")
+    assert api_calls.requests == []

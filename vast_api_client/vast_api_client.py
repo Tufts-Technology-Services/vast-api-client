@@ -1,3 +1,4 @@
+import json
 import logging
 import os
 from collections.abc import Sequence
@@ -13,6 +14,7 @@ from vast_api_client.exceptions import (
     ResourceExistsError,
     VastAPIError,
     VastConnectionError,
+    VastError,
     VastNotFoundError,
 )
 from vast_api_client.models import (
@@ -37,8 +39,8 @@ QUERY_STRING_METHODS = {"GET", "HEAD", "OPTIONS", "DELETE"}
 
 
 def _verify_certs_from_env() -> bool:
-    """Legacy switch: VERIFY_CERTS=false (or 0, no) turns off certificate verification."""
-    return os.getenv("VERIFY_CERTS", "true").strip().lower() not in ("false", "0", "no")
+    """Legacy switch, read as the old client read it: anything but true, 1 or yes turns off verification."""
+    return os.getenv("VERIFY_CERTS", "true").strip().lower() in ("true", "1", "yes")
 
 
 def _reveal(secret) -> str | None:
@@ -73,7 +75,8 @@ class VASTClient:
         :param tenant: tenant name, sent as X-Tenant-Name
         :param version: API version to use (default is 'v7')
         :param ca_file: CA bundle to verify the server certificate with (default is certifi's)
-        :param verify: False skips certificate verification, as does the env var VERIFY_CERTS=false
+        :param verify: False skips certificate verification, as does setting the env var VERIFY_CERTS to
+            anything but true, 1 or yes
         """
         credentials = VastCredentials(user=user, password=password, token=token, tenant=tenant)
         self.host = host
@@ -106,10 +109,11 @@ class VASTClient:
         :param endpoint: path below api/<version>/, without leading or trailing slashes: "quotas/5"
         :param query: query parameters, for GET and DELETE
         :param body: JSON body, for POST, PATCH and DELETE
-        :return: the parsed JSON response, or None if the response has no JSON body
+        :return: the parsed JSON response, or None if the response has no body or one that isn't JSON
         :raises VastNotFoundError: the API answered 404
         :raises VastAPIError: the API answered with another non-2xx status
         :raises VastConnectionError: no HTTP answer: connection refused, TLS failure, etc.
+        :raises VastError: an answer that couldn't be read: malformed JSON, or an error body that isn't UTF-8
         """
         if query and method not in QUERY_STRING_METHODS:
             raise ValueError(f"query parameters can't be sent with {method}")
@@ -126,9 +130,19 @@ class VASTClient:
             ) from failure
         except urllib3.exceptions.HTTPError as error:
             raise VastConnectionError(f"{method} {endpoint} on {self.host} failed: {error}") from error
-        # vastpy returns raw bytes when the response has no JSON body: b"" for a 204
+        except ValueError as error:
+            # vastpy's json.loads of a malformed body, or RESTFailure decoding a non-UTF-8 error body
+            raise VastError(f"{method} {endpoint} on {self.host}: unreadable response: {error}") from error
+        # vastpy returns raw bytes unless the Content-Type says JSON: b"" for a 204, but also JSON
+        # under another Content-Type, which the old requests transport parsed regardless
         if isinstance(result, bytes):
-            return None
+            if not result:
+                return None
+            try:
+                return json.loads(result)
+            except ValueError:
+                logger.warning(f"{method} {endpoint} answered with a body that isn't JSON; ignoring it")
+                return None
         return result
 
     def get_quotas(self, path: Path = None):
@@ -351,5 +365,8 @@ class VASTClient:
         :param path: where in the catalog to look
         :return: catalog entries matching the query
         """
+        if isinstance(fields, str):
+            # list() would split it into one-letter column names
+            raise TypeError("fields must be a sequence of column names, not a string")
         query = CatalogQuery(path=path, filters=filters, fields=list(fields))
         return self._call("POST", "bigcatalogconfig/query_data", body=query.model_dump(mode="json"))

@@ -18,6 +18,10 @@ class VastAPIError(VastError):
         self.body = body
         super().__init__(f"{method} {endpoint} failed with HTTP {status}: {body}")
 
+    # pickle rebuilds an exception from its args, which hold only the message
+    def __reduce__(self):
+        return (self.__class__, (self.status, self.method, self.endpoint, self.body))
+
 
 class VastNotFoundError(VastAPIError):
     """The API answered 404."""

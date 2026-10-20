@@ -6,6 +6,7 @@ urllib3.PoolManager is replaced with a fake, so nothing leaves the process.
 import base64
 import json
 import logging
+import pickle
 from dataclasses import dataclass, field
 from pathlib import Path
 
@@ -14,7 +15,7 @@ import pytest
 import urllib3
 import vastpy
 
-from vast_api_client import VastAPIError, VASTClient, VastConnectionError, VastNotFoundError
+from vast_api_client import VastAPIError, VASTClient, VastConnectionError, VastError, VastNotFoundError
 
 HOST = "vast.example.edu"
 
@@ -193,7 +194,7 @@ def test_verify_false(vms, caplog):
     assert vms.pool_settings[0] == {"cert_reqs": "CERT_NONE"}
 
 
-@pytest.mark.parametrize("setting", ["false", "0", "no", "False"])
+@pytest.mark.parametrize("setting", ["false", "0", "no", "False", "off", ""])
 def test_verify_certs_env_var(vms, monkeypatch, setting):
     monkeypatch.setenv("VERIFY_CERTS", setting)
     VASTClient(HOST, "alice", "secret")._call("GET", "quotas")
@@ -251,9 +252,29 @@ def test_empty_204_returns_none(client, vms):
     assert client._call("DELETE", "quotas/5") is None
 
 
-def test_non_json_body_returns_none(client, vms):
+def test_non_json_body_returns_none(client, vms, caplog):
     vms.reply_raw(b"ok")
     assert client._call("POST", "folders/create_folder", body={"path": "/x"}) is None
+    assert "isn't JSON" in caplog.text
+
+
+def test_json_under_another_content_type_is_parsed(client, vms):
+    vms.reply_raw(b'[{"id": 1}]', content_type="text/html")
+    assert client._call("GET", "quotas") == [{"id": 1}]
+
+
+def test_malformed_json_raises_vast_error(client, vms):
+    vms.reply_raw(b'[{"id": 1', content_type="application/json")
+    with pytest.raises(VastError) as caught:
+        client._call("GET", "quotas")
+    assert isinstance(caught.value.__cause__, ValueError)
+
+
+def test_non_utf8_error_body_raises_vast_error(client, vms):
+    vms.reply_raw(b"\xff\xfe bad gateway", status=502, content_type="text/html")
+    with pytest.raises(VastError) as caught:
+        client._call("GET", "quotas")
+    assert isinstance(caught.value.__cause__, UnicodeDecodeError)
 
 
 def test_delete_quota(client, vms):
@@ -268,3 +289,14 @@ def test_delete_folder_sends_a_body(client, vms):
     assert client.delete_folder(Path("/rstore/lab"), tenant_id=1) == {"status": "deleted"}
     assert vms.requests[0].url == f"https://{HOST}/api/v7/folders/delete_folder/"
     assert json.loads(vms.requests[0].body) == {"path": "/rstore/lab", "tenant_id": 1}
+
+
+@pytest.mark.parametrize("error_class", [VastAPIError, VastNotFoundError])
+def test_api_errors_survive_pickling(error_class):
+    error = error_class(status=404, method="GET", endpoint="quotas/5", body="gone")
+
+    restored = pickle.loads(pickle.dumps(error))
+
+    assert type(restored) is error_class
+    assert (restored.status, restored.method, restored.endpoint, restored.body) == (404, "GET", "quotas/5", "gone")
+    assert str(restored) == str(error)
