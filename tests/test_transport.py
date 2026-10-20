@@ -7,6 +7,8 @@ import base64
 import json
 import logging
 import pickle
+import socket
+import time
 from dataclasses import dataclass, field
 from pathlib import Path
 
@@ -16,6 +18,7 @@ import urllib3
 import vastpy
 
 from vast_api_client import VastAPIError, VASTClient, VastConnectionError, VastError, VastNotFoundError
+from vast_api_client.transport import TimedVASTClient
 
 HOST = "vast.example.edu"
 
@@ -191,14 +194,16 @@ def test_verify_false(vms, caplog):
         client = VASTClient(HOST, "alice", "secret", verify=False)
     assert "verification is off" in caplog.text
     client._call("GET", "quotas")
-    assert vms.pool_settings[0] == {"cert_reqs": "CERT_NONE"}
+    assert vms.pool_settings[0]["cert_reqs"] == "CERT_NONE"
+    assert "ca_certs" not in vms.pool_settings[0]
 
 
 @pytest.mark.parametrize("setting", ["false", "0", "no", "False", "off", ""])
 def test_verify_certs_env_var(vms, monkeypatch, setting):
     monkeypatch.setenv("VERIFY_CERTS", setting)
     VASTClient(HOST, "alice", "secret")._call("GET", "quotas")
-    assert vms.pool_settings[0] == {"cert_reqs": "CERT_NONE"}
+    assert vms.pool_settings[0]["cert_reqs"] == "CERT_NONE"
+    assert "ca_certs" not in vms.pool_settings[0]
 
 
 def test_verify_certs_env_var_true_keeps_verification(vms, monkeypatch):
@@ -300,3 +305,136 @@ def test_api_errors_survive_pickling(error_class):
     assert type(restored) is error_class
     assert (restored.status, restored.method, restored.endpoint, restored.body) == (404, "GET", "quotas/5", "gone")
     assert str(restored) == str(error)
+
+
+# timeout and retries
+
+
+def test_default_timeout_and_retries_reach_the_pool(client, vms):
+    client._call("GET", "quotas")
+
+    settings = vms.pool_settings[0]
+    assert (settings["timeout"].connect_timeout, settings["timeout"].read_timeout) == (10, 30)
+    assert (settings["retries"].total, settings["retries"].read) == (1, 0)
+
+
+def test_timeout_and_retries_can_be_set(vms):
+    VASTClient(HOST, "alice", "secret", timeout=5, retries=0)._call("GET", "quotas")
+
+    assert vms.pool_settings[0]["timeout"] == 5
+    assert vms.pool_settings[0]["retries"] == 0
+
+
+def test_timeout_is_kept_by_child_clients(vms):
+    client = VASTClient(HOST, "alice", "secret", timeout=5, verify=False)
+
+    client.api["folders"]["stat_path"].post(path="/x")
+    client.api.quotas.get()
+
+    assert [settings["timeout"] for settings in vms.pool_settings] == [5, 5]
+
+
+@pytest.mark.parametrize(
+    "credentials, method, fields, data",
+    [
+        ({"user": "alice", "password": "secret"}, "GET", {"path": "/x", "fields": ["id", "name"]}, None),
+        ({"token": "abc", "tenant": "research"}, "POST", None, {"path": "/x", "owner_is_group": True}),
+        ({"user": "alice", "password": "secret"}, "DELETE", None, {"path": "/x"}),
+    ],
+)
+def test_timed_request_matches_vastpy(vms, credentials, method, fields, data):
+    """TimedVASTClient.request is a copy of vastpy's: what it sends must not drift from the original."""
+    settings = {"address": HOST, "cert_file": certifi.where(), "version": "v7", **credentials}
+    for client in (vastpy.VASTClient(**settings), TimedVASTClient(**settings)):
+        vms.reply_json({"id": 1})
+        assert client["folders/stat_path"].request(method, fields=fields, data=data) == {"id": 1}
+
+    original, timed = vms.requests
+    assert timed == original
+    original_pool, timed_pool = vms.pool_settings
+    assert {key: value for key, value in timed_pool.items() if key not in ("timeout", "retries")} == original_pool
+
+
+def test_timed_request_raises_rest_failure_like_vastpy(vms):
+    vms.reply_raw(b"nope", status=403)
+    with pytest.raises(vastpy.RESTFailure) as caught:
+        TimedVASTClient(address=HOST, user="alice", password="secret", version="v7")["quotas"].request("GET")
+    assert (caught.value.status, caught.value.url) == (403, "api/v7/quotas")
+
+
+@pytest.fixture
+def silent_server():
+    """A TCP port that accepts connections (through the listen backlog) and never answers."""
+    listener = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+    try:
+        listener.bind(("127.0.0.1", 0))
+    except PermissionError:
+        listener.close()
+        pytest.skip("binding a local port isn't allowed here")
+    listener.listen(8)
+    yield f"127.0.0.1:{listener.getsockname()[1]}"
+    listener.close()
+
+
+def test_a_server_that_never_answers_times_out(silent_server):
+    client = VASTClient(silent_server, "alice", "secret", timeout=0.2)
+
+    started = time.monotonic()
+    with pytest.raises(VastConnectionError):
+        client.get_quotas()
+
+    # 0.2s, and once more for the retry, rather than forever; and not at once, for some other reason
+    assert 0.2 <= time.monotonic() - started < 2
+
+
+def socket_io_allowed() -> bool:
+    ours, theirs = socket.socketpair()
+    try:
+        ours.sendall(b"x")
+        return theirs.recv(1) == b"x"
+    except PermissionError:
+        return False
+    finally:
+        ours.close()
+        theirs.close()
+
+
+def test_a_connection_that_never_answers_times_out(monkeypatch):
+    """The same, without binding a port: urllib3 gets one end of a socket pair whose other end stays silent."""
+    if not socket_io_allowed():
+        pytest.skip("socket I/O isn't allowed here")
+    silent_ends = []
+
+    def connect_to_silence(address, timeout=None, *args, **kwargs):
+        ours, theirs = socket.socketpair()
+        silent_ends.append(theirs)
+        ours.settimeout(timeout)
+        return ours
+
+    monkeypatch.setattr(urllib3.util.connection, "create_connection", connect_to_silence)
+    # without a CA bundle to load, which some sandboxes refuse: this is about waiting, not verifying
+    client = VASTClient(HOST, "alice", "secret", timeout=0.2, verify=False)
+
+    started = time.monotonic()
+    with pytest.raises(VastConnectionError):
+        client.get_quotas()
+
+    assert 0.2 <= time.monotonic() - started < 2
+    # a stalled handshake is a read timeout, which isn't retried
+    assert len(silent_ends) == 1
+    for end in silent_ends:
+        end.close()
+
+
+def test_a_refused_connection_is_retried_once(monkeypatch):
+    attempts = []
+
+    def refuse(address, timeout=None, *args, **kwargs):
+        attempts.append(address)
+        raise ConnectionRefusedError("refused")
+
+    monkeypatch.setattr(urllib3.util.connection, "create_connection", refuse)
+
+    with pytest.raises(VastConnectionError):
+        VASTClient(HOST, "alice", "secret", verify=False).get_quotas()
+    assert attempts == [(HOST, 443), (HOST, 443)]

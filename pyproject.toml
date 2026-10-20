@@ -16,8 +16,9 @@ dependencies = [
     "pydantic>=2.9.1",
     # urllib3 is vastpy's transport; we import it directly to map its exceptions
     "urllib3>=1.26",
-    # 0.3.22 fixes the Api-Token auth header and adds the version parameter
-    "vastpy>=0.3.22",
+    # 0.3.22 fixes the Api-Token auth header and adds the version parameter. Capped because
+    # transport.TimedVASTClient copies 0.3.22's request(): a new vastpy has to be checked against it.
+    "vastpy>=0.3.22,<0.4",
 ]
 
 [project.urls]

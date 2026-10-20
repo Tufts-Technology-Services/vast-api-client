@@ -31,6 +31,7 @@ from vast_api_client.models import (
     ShareCreate,
     ViewCreate,
 )
+from vast_api_client.transport import DEFAULT_RETRIES, DEFAULT_TIMEOUT, TimedVASTClient
 
 logger = logging.getLogger(__name__)
 
@@ -65,6 +66,8 @@ class VASTClient:
         version: str = "v7",
         ca_file: str | Path = None,
         verify: bool = True,
+        timeout: float | urllib3.Timeout | None = DEFAULT_TIMEOUT,
+        retries: int | urllib3.Retry = DEFAULT_RETRIES,
     ):
         """
         supply either user and password, or an API token. Nothing is sent until the first request.
@@ -77,6 +80,9 @@ class VASTClient:
         :param ca_file: CA bundle to verify the server certificate with (default is certifi's)
         :param verify: False skips certificate verification, as does setting the env var VERIFY_CERTS to
             anything but true, 1 or yes
+        :param timeout: seconds, or a urllib3.Timeout for separate connect and read limits (default 10s to
+            connect, 30s to read). None waits indefinitely.
+        :param retries: retries, or a urllib3.Retry (default: one more try if the connection fails)
         """
         credentials = VastCredentials(user=user, password=password, token=token, tenant=tenant)
         self.host = host
@@ -89,7 +95,7 @@ class VASTClient:
             logger.warning(f"TLS certificate verification is off for {host}")
             cert_file = None
 
-        self.api = vastpy.VASTClient(
+        self.api = TimedVASTClient(
             user=credentials.user,
             password=_reveal(credentials.password),
             token=_reveal(credentials.token),
@@ -97,6 +103,8 @@ class VASTClient:
             address=host,
             cert_file=cert_file,
             version=version,
+            timeout=timeout,
+            retries=retries,
         )
 
     def __repr__(self):
