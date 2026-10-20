@@ -315,7 +315,8 @@ class CatalogQuery(BaseModel):
 
     model_config = ConfigDict(extra="forbid", str_strip_whitespace=True, frozen=True)
     path: str = "/"
-    filters: dict[str, list[dict[str, Any]]] = Field(default_factory=dict)
+    # VAST rejects a query without a filter
+    filters: dict[str, list[dict[str, Any]]] = Field(min_length=1)
     fields: list[str] = Field(default_factory=lambda: ["name"], min_length=1)
 
     # validate_path rejects "/" and trailing slashes, both of which catalog queries use

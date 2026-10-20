@@ -421,22 +421,29 @@ def test_catalog_query_body():
 
 
 def test_catalog_query_defaults():
-    query = CatalogQuery()
+    query = CatalogQuery(filters=GISUSERS_FILTERS)
 
-    assert query.model_dump(mode="json") == {"path": "/", "filters": {}, "fields": ["name"]}
+    assert query.model_dump(mode="json") == {"path": "/", "filters": GISUSERS_FILTERS, "fields": ["name"]}
 
 
 def test_catalog_query_defaults_are_not_shared():
-    first = CatalogQuery()
+    first = CatalogQuery(filters=GISUSERS_FILTERS)
     first.fields.append("size")
-    first.filters["name"] = [{"eq": "x"}]
 
-    assert CatalogQuery().model_dump(mode="json") == {"path": "/", "filters": {}, "fields": ["name"]}
+    assert CatalogQuery(filters=GISUSERS_FILTERS).fields == ["name"]
+
+
+@pytest.mark.parametrize("filters", [None, {}])
+def test_catalog_query_needs_a_filter(filters):
+    with pytest.raises(ValueError):
+        CatalogQuery(filters=filters)
+    with pytest.raises(ValueError):
+        CatalogQuery()
 
 
 @pytest.mark.parametrize("path", ["/", "/smb/gisusers/", "/smb/gisusers", "/rstore/lab.old/my_dir-2"])
 def test_catalog_query_accepts_path(path):
-    assert CatalogQuery(path=path).path == path
+    assert CatalogQuery(path=path, filters=GISUSERS_FILTERS).path == path
 
 
 @pytest.mark.parametrize(
@@ -444,7 +451,7 @@ def test_catalog_query_accepts_path(path):
 )
 def test_catalog_query_rejects_path(path):
     with pytest.raises(ValueError):
-        CatalogQuery(path=path)
+        CatalogQuery(path=path, filters=GISUSERS_FILTERS)
 
 
 @pytest.mark.parametrize("operator", ["eq", "startswith", "gt", "ge", "lt", "le"])
@@ -485,14 +492,14 @@ def test_catalog_query_rejects_malformed_filters(filters):
 @pytest.mark.parametrize("fields", [[], [""], None])
 def test_catalog_query_rejects_fields(fields):
     with pytest.raises(ValueError):
-        CatalogQuery(fields=fields)
+        CatalogQuery(filters=GISUSERS_FILTERS, fields=fields)
 
 
 def test_catalog_query_rejects_unknown_keys():
     with pytest.raises(ValueError):
-        CatalogQuery(page_size=100)
+        CatalogQuery(filters=GISUSERS_FILTERS, page_size=100)
 
 
 def test_validation_errors_are_value_errors():
     with pytest.raises(ValidationError):
-        CatalogQuery(path="relative")
+        CatalogQuery(path="relative", filters=GISUSERS_FILTERS)

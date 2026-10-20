@@ -313,7 +313,7 @@ def test_get_protection_policies(vast, api_calls):
 
 
 def test_query_catalog(vast, api_calls):
-    vast.query_catalog()
+    vast.query_catalog({"parent_path": [{"eq": "/smb/gisusers/"}], "element_type": [{"eq": "DIR"}]})
 
     assert api_calls.requests == [
         (
@@ -327,3 +327,23 @@ def test_query_catalog(vast, api_calls):
             },
         )
     ]
+
+
+def test_query_catalog_with_fields_and_path(vast, api_calls):
+    vast.query_catalog({"size": [{"ge": 1048576}]}, fields=["name", "size"], path="/rstore/")
+
+    assert api_calls.requests == [
+        (
+            "POST",
+            "bigcatalogconfig/query_data",
+            None,
+            {"path": "/rstore/", "filters": {"size": [{"ge": 1048576}]}, "fields": ["name", "size"]},
+        )
+    ]
+
+
+@pytest.mark.parametrize("filters", [{}, {"name": [{"contains": "report"}]}])
+def test_query_catalog_rejects_bad_filters(vast, api_calls, filters):
+    with pytest.raises(ValueError):
+        vast.query_catalog(filters)
+    assert api_calls.requests == []

@@ -1,6 +1,8 @@
 import logging
 import os
+from collections.abc import Sequence
 from pathlib import Path
+from typing import Any
 
 import certifi
 import urllib3
@@ -17,6 +19,7 @@ from vast_api_client.models import (
     ACL,
     ACLGrantee,
     ACLPerm,
+    CatalogQuery,
     FolderCreateOrUpdate,
     PathBody,
     ProtectedPathCreate,
@@ -146,7 +149,7 @@ class VASTClient:
         return self._call("GET", "views")
 
     @staticmethod
-    def create_acl_from_str(perm: str, grantee: str, sid_str: str, uid_or_gid: int) -> ACL:
+    def create_acl_from_str(perm: str, grantee: str, sid_str: str, uid_or_gid: int | None) -> ACL:
         """
         create an ACL object to be used with add_view if you don't easy access to model enums
         :return: ACL object
@@ -239,20 +242,9 @@ class VASTClient:
         :param group: group that owns the folder
         :param user: user that owns the folder
         """
-        owner_is_group = group == user
-        if user is None and owner_is_group is None:
-            folder = FolderCreateOrUpdate(path=path, group=group)
-        elif user is None:
-            folder = FolderCreateOrUpdate(path=path, group=group, owner_is_group=owner_is_group)
-        elif owner_is_group is None:
-            folder = FolderCreateOrUpdate(path=path, group=group, user=user)
-        else:
-            folder = FolderCreateOrUpdate(path=path, group=group, user=user, owner_is_group=owner_is_group)
-        return self._call(
-            "POST",
-            "folders/create_folder",
-            body=folder.model_dump(exclude_unset=True, exclude_defaults=True, mode="json"),
-        )
+        folder = FolderCreateOrUpdate(path=path, group=group, user=user, owner_is_group=group == user)
+        # only what's changing: a user of None and owner_is_group False are left out
+        return self._call("POST", "folders/create_folder", body=folder.model_dump(exclude_defaults=True, mode="json"))
 
     def delete_folder(self, path: Path, tenant_id: int = None):
         """
@@ -345,18 +337,19 @@ class VASTClient:
             return self._call("GET", "protectionpolicies", query={"source_dir": source_dir.as_posix()})
         return self._call("GET", "protectionpolicies")
 
-    def query_catalog(self, query_params: dict = None):
+    def query_catalog(
+        self,
+        filters: dict[str, list[dict[str, Any]]],
+        fields: Sequence[str] = ("name",),
+        path: str = "/",
+    ):
         """
-        Query the catalog with optional parameters
-        :param query_params: dictionary of query parameters
+        Query the VAST Catalog. The directories in /smb/gisusers/, say:
+        vast.query_catalog({"parent_path": [{"eq": "/smb/gisusers/"}], "element_type": [{"eq": "DIR"}]})
+        :param filters: catalog column to a list of {operator: value} conditions; VAST needs at least one
+        :param fields: catalog columns to return
+        :param path: where in the catalog to look
         :return: catalog entries matching the query
         """
-        payload = {
-            "path": "/",
-            "filters": {
-                "parent_path": [{"eq": "/smb/gisusers/"}],
-                "element_type": [{"eq": "DIR"}],
-            },
-            "fields": ["name"],
-        }
-        return self._call("POST", "bigcatalogconfig/query_data", body=payload)
+        query = CatalogQuery(path=path, filters=filters, fields=list(fields))
+        return self._call("POST", "bigcatalogconfig/query_data", body=query.model_dump(mode="json"))

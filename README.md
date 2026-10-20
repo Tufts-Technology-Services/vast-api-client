@@ -20,7 +20,17 @@ The server certificate is checked against certifi's CA bundle, or `ca_file='/pat
 Failed requests raise `VastAPIError` (`VastNotFoundError` for a 404) or `VastConnectionError`, all subclasses
 of `VastError`. Endpoints without a wrapper method are reachable through vastpy directly: `vast.api['clusters'].get()`.
 
-currently supports:
-get/create quota
-get/create view
-get dashboard data
+Wrapped endpoints, each validating its request with a pydantic model before anything is sent:
+- quotas: `get_quotas`, `add_quota`, `update_quota_size`, `delete_quota`
+- views and SMB shares: `get_views`, `add_view` (ACLs from `create_acl_from_str`)
+- folders: `get_folder`, `add_folder`, `modify_folder`, `delete_folder`
+- protection: `get_protected_paths`, `add_protected_path`, `get_protection_policies`
+- capacity: `get_total_capacity`
+- catalog: `query_catalog`
+
+## Development
+```
+uv sync
+uv run pytest
+uv run ruff check . && uv run ruff format --check .
+```
