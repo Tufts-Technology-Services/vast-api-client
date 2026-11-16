@@ -568,8 +568,7 @@ def test_query_catalog_is_a_get_with_its_query_in_the_url(client, vms):
     assert sent.fields == [
         ("path", "/"),
         ("filters", '{"parent_path": [{"eq": "/projects/lab/"}]}'),
-        ("fields", "name"),
-        ("fields", "size"),
+        ("fields", "name,size"),
         ("limit", 50),
         ("ordering", "name"),
     ]

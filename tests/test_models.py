@@ -392,12 +392,14 @@ def test_catalog_query_params():
         filters=GISUSERS_FILTERS, fields=["name", "size"], limit=50, ordering=["name"], snapshot="daily", tenant_id=1
     )
 
+    # VAST takes several columns as one comma-separated value: repeated, it keeps only the last, and a
+    # JSON list is a 400 (both checked on the hpc VMS, 2026-11-16)
     assert query.query_params() == {
         "path": "/",
         "filters": json.dumps(GISUSERS_FILTERS),
-        "fields": ["name", "size"],
+        "fields": "name,size",
         "limit": 50,
-        "ordering": ["name"],
+        "ordering": "name",
         "snapshot": "daily",
         "tenant_id": 1,
     }
@@ -486,6 +488,19 @@ def test_catalog_query_rejects_operator(operator):
 def test_catalog_query_rejects_malformed_filters(filters):
     with pytest.raises(ValueError):
         CatalogQuery(filters=filters)
+
+
+def test_catalog_query_sends_several_orderings_comma_separated():
+    query = CatalogQuery(filters=GISUSERS_FILTERS, ordering=["size", "name"])
+
+    assert query.query_params()["ordering"] == "size,name"
+
+
+@pytest.mark.parametrize("field", ["fields", "ordering"])
+def test_catalog_query_rejects_a_column_with_a_comma(field):
+    # VAST would read "name,size" sent as one column as two
+    with pytest.raises(ValueError):
+        CatalogQuery(filters=GISUSERS_FILTERS, **{field: ["name,size"]})
 
 
 @pytest.mark.parametrize("fields", [[], [""], None, "name"])
