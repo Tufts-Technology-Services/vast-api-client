@@ -510,7 +510,8 @@ def test_user_quota_query_leaves_out_what_isnt_given():
 def test_user_quota_query_body():
     query = UserQuotaQuery(path=Path("/homedir"), entity_identifier="smith01")
 
-    assert query.model_dump(mode="json", exclude_none=True) == {"path": "/homedir", "entity_identifier": "smith01"}
+    # VAST filters on entity__identifier (checked on the hpc VMS, 2026-11-16); entity_identifier is ignored
+    assert query.model_dump(mode="json", exclude_none=True) == {"path": "/homedir", "entity__identifier": "smith01"}
 
 
 @pytest.mark.parametrize("uid", [12345, 0])

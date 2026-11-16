@@ -220,10 +220,14 @@ def uid_or_name_as_text(value):
 class UserQuotaQuery(BaseModel):
     """GET userquotas' filters; dump with exclude_none=True, so a filter not given is left out"""
 
-    model_config = ConfigDict(extra="forbid")
+    model_config = ConfigDict(extra="forbid", serialize_by_alias=True)
     path: VastPath | None = None
-    # a username, group name, UID or GID (a number is taken too): one word, as VAST matches it whole
-    entity_identifier: Annotated[str, BeforeValidator(uid_or_name_as_text), Field(pattern=r"^\S+$")] | None = None
+    # a username, group name, UID or GID (a number is taken too): one word, as VAST matches it whole.
+    # VAST's filter is entity__identifier, a Django lookup; entity_identifier is silently ignored and
+    # every entry comes back (checked on the hpc VMS, 2026-11-16)
+    entity_identifier: Annotated[str, BeforeValidator(uid_or_name_as_text), Field(pattern=r"^\S+$")] | None = Field(
+        default=None, serialization_alias="entity__identifier"
+    )
     # entries per page, if not VAST's default; the next links carry it on
     page_size: StrictPositiveInt | None = None
 

@@ -437,14 +437,14 @@ def test_get_user_quotas_for_one_person_in_one_quota(vast, api_calls):
     api_calls.responses.append({"count": 1, "next": None, "previous": None, "results": [{"id": 7}]})
 
     assert vast.get_user_quotas(path=Path("/homedir"), identifier="tphimm01") == [{"id": 7}]
-    assert api_calls.requests == [("GET", "userquotas", {"path": "/homedir", "entity_identifier": "tphimm01"}, None)]
+    assert api_calls.requests == [("GET", "userquotas", {"path": "/homedir", "entity__identifier": "tphimm01"}, None)]
 
 
 def test_get_user_quotas_follows_next_across_pages(vast, api_calls):
     api_calls.responses += [
         {
             "count": 3,
-            "next": "https://vast.example.edu/api/v7/userquotas/?entity_identifier=x&page=2&path=%2Fhomedir",
+            "next": "https://vast.example.edu/api/v7/userquotas/?entity__identifier=x&page=2&path=%2Fhomedir",
             "previous": None,
             "results": [{"id": 1}, {"id": 2}],
         },
@@ -453,8 +453,8 @@ def test_get_user_quotas_follows_next_across_pages(vast, api_calls):
 
     assert vast.get_user_quotas(path=Path("/homedir"), identifier="x") == [{"id": 1}, {"id": 2}, {"id": 3}]
     assert api_calls.requests == [
-        ("GET", "userquotas", {"path": "/homedir", "entity_identifier": "x"}, None),
-        ("GET", "userquotas", {"entity_identifier": "x", "page": "2", "path": "/homedir"}, None),
+        ("GET", "userquotas", {"path": "/homedir", "entity__identifier": "x"}, None),
+        ("GET", "userquotas", {"entity__identifier": "x", "page": "2", "path": "/homedir"}, None),
     ]
 
 
@@ -647,7 +647,7 @@ def test_a_next_link_back_to_a_page_in_another_order_is_caught(vast, api_calls):
 def test_errors_during_a_walk_dont_name_who_was_looked_up(vast, api_calls):
     api_calls.responses += [
         {
-            "next": "https://vast.example.edu/api/v7/userquotas/?entity_identifier=smith01&page=2",
+            "next": "https://vast.example.edu/api/v7/userquotas/?entity__identifier=smith01&page=2",
             "results": [{"id": 1}],
         },
         VastNotFoundError(status=404, method="GET", endpoint="userquotas", body="{}"),
@@ -753,7 +753,7 @@ def test_get_user_quotas_takes_a_uid_as_a_number(vast, api_calls):
 
     vast.get_user_quotas(path=Path("/homedir"), identifier=12345)
 
-    assert api_calls.requests == [("GET", "userquotas", {"path": "/homedir", "entity_identifier": "12345"}, None)]
+    assert api_calls.requests == [("GET", "userquotas", {"path": "/homedir", "entity__identifier": "12345"}, None)]
 
 
 @pytest.mark.parametrize("identifier", ["", "  ", "two words", True, 1.5, -1])
