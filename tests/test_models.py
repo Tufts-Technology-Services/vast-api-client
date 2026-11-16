@@ -18,6 +18,7 @@ from vast_api_client.models import (
     QuotaCreate,
     QuotaUpdate,
     ShareCreate,
+    UserQuotaQuery,
     ViewCreate,
     validate_path,
 )
@@ -496,3 +497,42 @@ def test_catalog_query_rejects_fields(fields):
 def test_catalog_query_rejects_unknown_keys():
     with pytest.raises(ValueError):
         CatalogQuery(filters=GISUSERS_FILTERS, page_size=100)
+
+
+# The user quota query
+
+
+def test_user_quota_query_leaves_out_what_isnt_given():
+    assert UserQuotaQuery().model_dump(mode="json", exclude_none=True) == {}
+    assert UserQuotaQuery(path=Path("/homedir")).model_dump(mode="json", exclude_none=True) == {"path": "/homedir"}
+
+
+def test_user_quota_query_body():
+    query = UserQuotaQuery(path=Path("/homedir"), entity_identifier="smith01")
+
+    assert query.model_dump(mode="json", exclude_none=True) == {"path": "/homedir", "entity_identifier": "smith01"}
+
+
+@pytest.mark.parametrize("uid", [12345, 0])
+def test_user_quota_query_takes_a_uid_or_gid_as_a_number(uid):
+    assert UserQuotaQuery(entity_identifier=uid).entity_identifier == str(uid)
+
+
+@pytest.mark.parametrize("identifier", ["", " ", "two words", "tab\there", True, 1.5, -1])
+def test_user_quota_query_rejects_an_identifier_that_isnt_one_word(identifier):
+    with pytest.raises(ValueError):
+        UserQuotaQuery(entity_identifier=identifier)
+
+
+def test_user_quota_query_page_size():
+    assert UserQuotaQuery(page_size=500).model_dump(mode="json", exclude_none=True) == {"page_size": 500}
+    for bad in [0, -1, True, "100"]:
+        with pytest.raises(ValueError):
+            UserQuotaQuery(page_size=bad)
+
+
+def test_user_quota_query_rejects_a_bad_path_and_unknown_fields():
+    with pytest.raises(ValueError):
+        UserQuotaQuery(path=Path("/homedir/x.old"))
+    with pytest.raises(ValueError):
+        UserQuotaQuery(page=2)

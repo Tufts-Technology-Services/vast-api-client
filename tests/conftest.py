@@ -4,7 +4,7 @@ from vast_api_client import VASTClient
 
 
 class RecordedCalls:
-    """Stands in for VASTClient._call: records each request and answers with queued responses."""
+    """Stands in for VASTClient._call: records each request and answers with queued responses, or raises queued exceptions."""
 
     def __init__(self):
         self.requests = []
@@ -14,7 +14,11 @@ class RecordedCalls:
     def __call__(self, method, endpoint, *, query=None, body=None, timeout=None):
         self.requests.append((method, endpoint, query, body))
         self.timeouts.append(timeout)
-        return self.responses.pop(0) if self.responses else {}
+        response = self.responses.pop(0) if self.responses else {}
+        # an exception queued as a response is raised, as _call would for a failed request
+        if isinstance(response, BaseException):
+            raise response
+        return response
 
 
 @pytest.fixture

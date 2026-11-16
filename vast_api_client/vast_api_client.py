@@ -1,6 +1,9 @@
 import json
 import logging
 import os
+import re
+import reprlib
+import urllib.parse
 from collections.abc import Sequence
 from pathlib import Path
 from typing import Any
@@ -8,6 +11,7 @@ from typing import Any
 import certifi
 import urllib3
 import vastpy
+from pydantic import TypeAdapter
 
 from vast_api_client.credentials import VastCredentials
 from vast_api_client.exceptions import (
@@ -30,11 +34,22 @@ from vast_api_client.models import (
     QuotaUpdate,
     ShareCreate,
     SourceDirQuery,
+    StrictPositiveInt,
+    UserQuotaQuery,
     ViewCreate,
 )
 from vast_api_client.transport import CATALOG_TIMEOUT, DEFAULT_RETRIES, DEFAULT_TIMEOUT, TimedVASTClient
 
 logger = logging.getLogger(__name__)
+
+# the most pages one listing follows; a VAST that keeps sending next links stops here, not never
+DEFAULT_MAX_PAGES = 1000
+
+# checks max_pages as the models check page_size
+PAGE_COUNT = TypeAdapter(StrictPositiveInt)
+
+# an API version in a next link's path, which VAST may give differently from ours: v7, v7.1, 7, latest
+API_VERSION_SEGMENT = re.compile(r"^(v?\d+(\.\d+)*|latest)$")
 
 # VAST answers folders/stat_path for a path that doesn't exist with a 503, not a 404:
 # {"detail": "Template directory path wasn't found", "code": "service_unavailable"}
@@ -50,6 +65,87 @@ QUERY_STRING_METHODS = {"GET", "HEAD", "OPTIONS", "DELETE"}
 def _verify_certs_from_env() -> bool:
     """Legacy switch, read as the old client read it: anything but true, 1 or yes turns off verification."""
     return os.getenv("VERIFY_CERTS", "true").strip().lower() in ("true", "1", "yes")
+
+
+def _is_whole_number(value) -> bool:
+    """An int, but not a bool, which Python counts as one: get_quota(True) would ask for quotas/True."""
+    return isinstance(value, int) and not isinstance(value, bool)
+
+
+def _require_quota_id(quota_id) -> int:
+    """
+    A quota id as quotas/<id> needs it. :raises TypeError: not an int (a bool included)
+    :raises ValueError: negative
+    """
+    if not _is_whole_number(quota_id):
+        raise TypeError("quota_id must be of type int")
+    if quota_id < 0:
+        raise ValueError(f"quota_id can't be negative: {quota_id}")
+    return quota_id
+
+
+def _user_quota_key(entry) -> tuple | None:
+    """
+    What makes two user quota entries the same one: its id, and the quota and entity it is for, so a
+    user and a group, or one person in two quotas, are never taken for each other even if their ids
+    match. None for an entry without a plain id, which is never taken for another.
+    """
+    if not isinstance(entry, dict):
+        return None
+    entry_id = entry.get("id")
+    if not _is_whole_number(entry_id) and not isinstance(entry_id, str):
+        return None
+    entity = entry.get("entity")
+    if not isinstance(entity, dict):
+        entity = {}
+    key = (entry_id, entry.get("quota_system_id"), entity.get("identifier"), entity.get("is_group"))
+    try:
+        hash(key)
+    except TypeError:
+        return None
+    return key
+
+
+def _without_repeats(entries: list, entry_key) -> list:
+    """
+    The entries in order, each once by entry_key: a page boundary that shifts between requests can repeat
+    one. A repeated entry keeps its first place but its last copy, the newer, in case it changed meanwhile.
+    An entry whose key is None is always kept.
+    """
+    places, kept = {}, []
+    for entry in entries:
+        key = entry_key(entry)
+        if key is None:
+            kept.append(entry)
+        elif key in places:
+            kept[places[key]] = entry
+        else:
+            places[key] = len(kept)
+            kept.append(entry)
+    return kept
+
+
+def _query_key(query: dict | None) -> frozenset:
+    """A request's query as something to compare, whatever order its parameters came in."""
+    return frozenset(
+        (name, tuple(str(item) for item in value) if isinstance(value, list) else str(value))
+        for name, value in (query or {}).items()
+    )
+
+
+def _query_from_link(query_string: str) -> dict:
+    """
+    A link's query parameters. VAST's links are Django REST framework's, built with urlencode, so they
+    decode the same way: + is a space, %2B a plus. A parameter given more than once becomes a list, as
+    _call sends lists.
+    """
+    parsed = urllib.parse.parse_qs(query_string, keep_blank_values=True)
+    return {name: values[0] if len(values) == 1 else values for name, values in parsed.items()}
+
+
+def _quoted(answer) -> str:
+    """An unexpected answer for an error message, cut short: a page can be large, and hold user data."""
+    return reprlib.repr(answer)
 
 
 def _reveal(secret) -> str | None:
@@ -180,6 +276,135 @@ class VASTClient:
             query = PathBody(path=path).model_dump(mode="json", exclude_none=True)
             return self._call("GET", "quotas", query=query)
         return self._call("GET", "quotas")
+
+    def get_quota(self, quota_id: int):
+        """
+        One quota, with what the list leaves out: its system_id, default_user_quota and user usage.
+        :param quota_id: the quota's id
+        :return: the quota
+        """
+        return self._call("GET", f"quotas/{_require_quota_id(quota_id)}")
+
+    def get_user_quotas(
+        self,
+        path: Path | None = None,
+        identifier: str | int | None = None,
+        *,
+        page_size: int | None = None,
+        max_pages: int = DEFAULT_MAX_PAGES,
+        timeout: float | urllib3.Timeout | None = None,
+    ):
+        """
+        User and group quota entries, every page of them.
+        :param path: only entries in the directory quota at this path
+        :param identifier: only entries whose entity identifier is this (a username, group name, UID or GID;
+            a UID or GID can be a number)
+        :param page_size: entries per page, if not VAST's default: fewer requests for a long listing
+        :param max_pages: the most pages to follow before giving up with VastError; at least 1
+        :param timeout: each page's timeout, for big pages on a busy VMS; the client's otherwise
+        :return: list of entries, users and groups alike (entity.is_group tells them apart). Filtered to one
+            person in one quota, that is one page; see _get_all_pages for what a longer walk can miss.
+        :raises VastError: an answer that isn't a list of entries or a page of them
+        """
+        query = UserQuotaQuery(path=path, entity_identifier=identifier, page_size=page_size).model_dump(
+            mode="json", exclude_none=True
+        )
+        return self._get_all_pages(
+            "userquotas", query or None, max_pages=max_pages, timeout=timeout, entry_key=_user_quota_key
+        )
+
+    def _get_all_pages(
+        self,
+        endpoint: str,
+        query: dict = None,
+        *,
+        max_pages: int = DEFAULT_MAX_PAGES,
+        timeout: float | urllib3.Timeout | None = None,
+        entry_key=None,
+    ) -> list:
+        """
+        GET an endpoint's entries, following each page's next link as VAST gives it, so whatever paging
+        it uses (page numbers, page_size, offsets, cursors) and any filters in the link carry over. An
+        unpaged answer, a plain list, is returned as it is.
+
+        The pages are separate requests, not a snapshot: an entry added or removed on VAST between two
+        of them shifts the pages, so one can come back twice or be missed. Give entry_key to drop repeats.
+        :param endpoint: path below api/<version>/: "userquotas"
+        :param query: the first request's query parameters
+        :param max_pages: the most pages to fetch
+        :param timeout: each request's timeout; the client's if None
+        :param entry_key: what makes two entries the same, for dropping repeats (see _without_repeats);
+            without it, every entry is kept
+        :return: every page's results, in order. If they don't add up to the last page's count, a warning
+            is logged: the listing changed during the walk. That is a hint, not a check: an entry missed
+            while another is added leaves the total right, and nothing is logged.
+        :raises VastError: an answer that isn't a list, or a page without a list of results; a next link to
+            another endpoint or to a page already asked for; an empty page that still has a next link; a next page
+            that is gone (a 404, as entries deleted mid-walk leave it past the end); more than max_pages
+        :raises VastNotFoundError: the first request answered 404
+        """
+        PAGE_COUNT.validate_python(max_pages)
+        response = self._call("GET", endpoint, query=query, timeout=timeout)
+        if isinstance(response, list):
+            return response
+        # error messages name pages by number, not by link: a link's query holds who was looked up
+        entries, asked = [], {_query_key(query)}
+        page = 1
+        while True:
+            results = response.get("results") if isinstance(response, dict) else None
+            if not isinstance(results, list):
+                raise VastError(
+                    f"GET {endpoint} on {self.host}: page {page} has no list of results: {_quoted(response)}"
+                )
+            next_link = response.get("next")
+            if not results and next_link:
+                raise VastError(f"GET {endpoint} on {self.host}: page {page} is empty but has a next link")
+            entries.extend(results)
+            if not next_link:
+                break
+            if page >= max_pages:
+                raise VastError(f"GET {endpoint} on {self.host}: still more pages after {max_pages} pages")
+            next_query = self._next_page_query(next_link, endpoint)
+            next_key = _query_key(next_query)
+            if next_key in asked:
+                raise VastError(
+                    f"GET {endpoint} on {self.host}: page {page}'s next link leads to a page already asked for"
+                )
+            asked.add(next_key)
+            try:
+                response = self._call("GET", endpoint, query=next_query or None, timeout=timeout)
+            except VastNotFoundError as error:
+                raise VastError(
+                    f"GET {endpoint} on {self.host}: page {page + 1} is gone; the listing changed during the walk"
+                ) from error
+            page += 1
+        if entry_key is not None:
+            entries = _without_repeats(entries, entry_key)
+        count = response.get("count")
+        if _is_whole_number(count) and count != len(entries):
+            logger.warning(
+                f"GET {endpoint} on {self.host}: {len(entries)} entries, but VAST's count is {count}; "
+                "the listing may have changed during the walk"
+            )
+        return entries
+
+    def _next_page_query(self, link: str, endpoint: str) -> dict:
+        """
+        The query parameters of a next link to the same endpoint, so the page goes through _call like any
+        request. The link's path is /api/<endpoint>/, with at most one version segment between (v7, latest).
+        Its scheme and host are left out: the page is asked of this client's host, so the client's
+        credentials never go anywhere else.
+        :raises VastError: a link that isn't to this endpoint
+        """
+        parts = urllib.parse.urlsplit(link)
+        segments = [segment for segment in parts.path.split("/") if segment]
+        wanted = endpoint.split("/")
+        after_api = segments[1:] if segments[:1] == ["api"] else None
+        versioned = after_api is not None and after_api[1:] == wanted and API_VERSION_SEGMENT.match(after_api[0])
+        if after_api != wanted and not versioned:
+            # the link's path only: its query holds who was looked up
+            raise VastError(f"GET {endpoint} on {self.host}: a next link to {parts.path} isn't to {endpoint}")
+        return _query_from_link(parts.query)
 
     def get_views(self, path: Path = None):
         if path is not None:
