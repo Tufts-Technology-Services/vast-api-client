@@ -413,6 +413,26 @@ def test_get_quota_rejects_a_negative_id(vast, api_calls):
     assert api_calls.requests == []
 
 
+def test_quota_changes_reject_negative_ids_and_sizes(vast, api_calls):
+    with pytest.raises(ValueError):
+        vast.update_quota_size(-1, 1024)
+    with pytest.raises(ValueError):
+        vast.update_quota_size(5, -1024)
+    with pytest.raises(ValueError):
+        vast.delete_quota(-1)
+    assert api_calls.requests == []
+
+
+def test_a_bool_isnt_a_quota_id_for_changes_either(vast, api_calls):
+    with pytest.raises(TypeError):
+        vast.update_quota_size(True, 1024)
+    with pytest.raises(TypeError):
+        vast.update_quota_size(5, True)
+    with pytest.raises(TypeError):
+        vast.delete_quota(True)
+    assert api_calls.requests == []
+
+
 def test_get_user_quotas_for_one_person_in_one_quota(vast, api_calls):
     api_calls.responses.append({"count": 1, "next": None, "previous": None, "results": [{"id": 7}]})
 

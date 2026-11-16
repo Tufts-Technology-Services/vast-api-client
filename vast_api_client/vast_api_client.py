@@ -551,21 +551,19 @@ class VASTClient:
         :param new_size: int in bytes
         :return: the API's response; a failure raises
         """
-        if isinstance(quota_id, int) and isinstance(new_size, int):
-            body = QuotaUpdate(soft_limit=new_size, hard_limit=new_size)
-            return self._call("PATCH", f"quotas/{quota_id}", body=body.model_dump(mode="json"))
-        else:
-            raise TypeError("quota_id and size must be of type int")
+        quota_id = _require_quota_id(quota_id)
+        if not _is_whole_number(new_size):
+            raise TypeError("new_size must be of type int")
+        # QuotaUpdate rejects a size below 1
+        body = QuotaUpdate(soft_limit=new_size, hard_limit=new_size)
+        return self._call("PATCH", f"quotas/{quota_id}", body=body.model_dump(mode="json"))
 
     def delete_quota(self, quota_id: int):
         """
         :return: {"status": "deleted"}; a failure raises
         """
-        if isinstance(quota_id, int):
-            self._call("DELETE", f"quotas/{quota_id}")
-            return {"status": "deleted"}
-        else:
-            raise TypeError("quota_id must be of type int")
+        self._call("DELETE", f"quotas/{_require_quota_id(quota_id)}")
+        return {"status": "deleted"}
 
     def get_total_capacity(self):
         """
