@@ -7,11 +7,13 @@ from typing import Annotated, Any, Literal
 from pydantic import (
     AfterValidator,
     BaseModel,
+    BeforeValidator,
     ConfigDict,
     Field,
     NonNegativeInt,
     PlainSerializer,
     PositiveInt,
+    Strict,
     field_serializer,
     field_validator,
     model_validator,
@@ -31,6 +33,9 @@ def validate_path(path: Path):
 
 # a path checked by validate_path and sent as a POSIX string
 VastPath = Annotated[Path, AfterValidator(validate_path), PlainSerializer(Path.as_posix)]
+
+# a positive int, given as an int: not True, 2.5 or "10"
+StrictPositiveInt = Annotated[PositiveInt, Strict()]
 
 
 @verify(UNIQUE)
@@ -199,6 +204,32 @@ class PathBody(BaseModel):
     model_config = ConfigDict(extra="forbid", str_strip_whitespace=True)
     path: VastPath
     tenant_id: int | None = None
+
+
+def uid_or_name_as_text(value):
+    """A UID or GID given as a number becomes its digits; VAST matches identifiers as text. Not a bool or a negative."""
+    if isinstance(value, bool):
+        raise ValueError("an identifier can't be True or False")
+    if isinstance(value, int):
+        if value < 0:
+            raise ValueError("a UID or GID can't be negative")
+        return str(value)
+    return value
+
+
+class UserQuotaQuery(BaseModel):
+    """GET userquotas' filters; dump with exclude_none=True, so a filter not given is left out"""
+
+    model_config = ConfigDict(extra="forbid", serialize_by_alias=True)
+    path: VastPath | None = None
+    # a username, group name, UID or GID (a number is taken too): one word, as VAST matches it whole.
+    # VAST's filter is entity__identifier, a Django lookup; entity_identifier is silently ignored and
+    # every entry comes back (checked on the hpc VMS, 2026-11-16)
+    entity_identifier: Annotated[str, BeforeValidator(uid_or_name_as_text), Field(pattern=r"^\S+$")] | None = Field(
+        default=None, serialization_alias="entity__identifier"
+    )
+    # entries per page, if not VAST's default; the next links carry it on
+    page_size: StrictPositiveInt | None = None
 
 
 class SourceDirQuery(BaseModel):

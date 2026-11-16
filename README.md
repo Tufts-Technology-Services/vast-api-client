@@ -26,7 +26,14 @@ Failed requests raise `VastAPIError` (`VastNotFoundError` for a 404) or `VastCon
 of `VastError`. Endpoints without a wrapper method are reachable through vastpy directly: `vast.api['clusters'].get()`.
 
 Wrapped endpoints, each validating its request with a pydantic model before anything is sent:
-- quotas: `get_quotas`, `add_quota`, `update_quota_size`, `delete_quota`
+- quotas: `get_quotas`, `get_quota` (one, by id, with its `system_id`, `default_user_quota` and user
+  usage), `add_quota`, `update_quota_size`, `delete_quota`
+- user quotas: `get_user_quotas`, filtered on VAST's side by `path` and `identifier` (a username, group
+  name, or a UID or GID as text or a number), every page followed:
+  `vast.get_user_quotas(path=Path('/homedir'), identifier='smith01')`. It returns users and groups alike,
+  so a caller looking for a person checks `entity.is_group`. A malformed or changing listing raises
+  `VastError`; the docstring of `_get_all_pages` has the details, and `page_size=`, `max_pages=` and
+  `timeout=` tune the walk.
 - views and SMB shares: `get_views`, `add_view` (ACLs from `create_acl_from_str`)
 - folders: `get_folder`, `add_folder`, `modify_folder`, `delete_folder`
 - protection: `get_protected_paths`, `add_protected_path`, `get_protection_policies`
