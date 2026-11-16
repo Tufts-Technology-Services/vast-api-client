@@ -71,6 +71,8 @@ CatalogOperator = Literal["eq", "startswith", "gt", "ge", "lt", "le"]
 # {operator: value, ...}: the operators in one condition are AND'ed, as in a range {"ge": 1, "lt": 10}
 CatalogCondition = Annotated[dict[CatalogOperator, Any], Field(min_length=1)]
 NonEmptyStr = Annotated[str, Field(min_length=1)]
+# a catalog column's name: no comma, as the query sends several columns as one comma-separated value
+CatalogColumn = Annotated[str, Field(min_length=1, pattern=r"^[^,]+$")]
 
 
 class QuotaUpdate(BaseModel):
@@ -257,18 +259,25 @@ class CatalogQuery(BaseModel):
     path: str = "/"
     # VAST rejects a query without a filter
     filters: dict[NonEmptyStr, Annotated[list[CatalogCondition], Field(min_length=1)]] = Field(min_length=1)
-    fields: list[NonEmptyStr] = Field(default_factory=lambda: ["name"], min_length=1)
+    fields: list[CatalogColumn] = Field(default_factory=lambda: ["name"], min_length=1)
     # left out unless given: VAST 5.3 has no default, and a limit below the number of rows that match
     # makes the query hang rather than cut the result short
     limit: PositiveInt | None = None
-    ordering: list[NonEmptyStr] | None = None
+    ordering: list[CatalogColumn] | None = None
     snapshot: NonEmptyStr | None = None
     tenant_id: PositiveInt | None = None
 
     def query_params(self) -> dict[str, Any]:
-        """as GET query parameters: filters as the JSON string VAST expects, and None left out"""
+        """
+        as GET query parameters: filters as the JSON string VAST expects, fields and ordering as one
+        comma-separated value each, and None left out. VAST keeps only the last of a repeated parameter
+        and refuses a JSON list for these (checked on the hpc VMS, 2026-11-16).
+        """
         params = self.model_dump(mode="json", exclude_none=True)
         params["filters"] = json.dumps(params["filters"])
+        for name in ("fields", "ordering"):
+            if name in params:
+                params[name] = ",".join(params[name])
         return params
 
     # validate_path rejects "/" and trailing slashes, both of which catalog queries use

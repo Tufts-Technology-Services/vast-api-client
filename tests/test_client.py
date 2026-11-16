@@ -323,7 +323,7 @@ def test_query_catalog(vast, api_calls):
             {
                 "path": "/",
                 "filters": '{"parent_path": [{"eq": "/smb/gisusers/"}], "element_type": [{"eq": "DIR"}]}',
-                "fields": ["name"],
+                "fields": "name",
             },
             None,
         )
@@ -348,9 +348,9 @@ def test_query_catalog_with_fields_and_path(vast, api_calls):
             {
                 "path": "/rstore/",
                 "filters": '{"size": [{"ge": 1048576, "lt": 1073741824}]}',
-                "fields": ["name", "size"],
+                "fields": "name,size",
                 "limit": 50,
-                "ordering": ["name"],
+                "ordering": "name",
                 "snapshot": "daily",
                 "tenant_id": 1,
             },
